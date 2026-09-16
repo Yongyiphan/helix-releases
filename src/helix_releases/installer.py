@@ -33,6 +33,12 @@ class RemoteCandidate:
     manifest_url: str
 
 
+@dataclass(frozen=True)
+class FetchedCandidate:
+    candidate: InstallCandidate
+    temporary_root: Path
+
+
 PACKAGE_ALIASES = {
     "hr": "helix-releases",
     "helix-releases": "helix-releases",
@@ -198,7 +204,7 @@ def remote_candidates(repository: str, channel: str = "stable") -> list[RemoteCa
     return result
 
 
-def fetch_remote_candidate(repository: str, requested: str, channel: str = "stable") -> RemoteCandidate:
+def fetch_remote_candidate(repository: str, requested: str, channel: str = "stable") -> FetchedCandidate:
     package = canonical_package(requested)
     matches = [item for item in remote_candidates(repository, channel) if item.candidate.package == package]
     if not matches:
@@ -215,7 +221,7 @@ def fetch_remote_candidate(repository: str, requested: str, channel: str = "stab
     except Exception:
         shutil.rmtree(temporary_root, ignore_errors=True)
         raise ReleaseError(f"could not download public release artifact: {artifact_url}")
-    return RemoteCandidate(InstallCandidate(package, selected.candidate.version, channel, destination, selected.candidate.sha256), temporary_root)
+    return FetchedCandidate(InstallCandidate(package, selected.candidate.version, channel, destination, selected.candidate.sha256), temporary_root)
 
 
 def _version_key(value: str) -> tuple:
@@ -258,7 +264,7 @@ def _restart_service(service: str | None) -> None:
         _run(["systemctl", "restart", service])
 
 
-def install_candidate(candidate: InstallCandidate, target: Path, service: str | None = None, *, restart: bool = True) -> dict:
+def install_candidate(candidate: InstallCandidate, target: Path, service: str | None = None, *, restart: bool = True, launcher_dir: Path | None = None) -> dict:
     actual = _sha256(candidate.artifact)
     if actual != candidate.sha256:
         raise ReleaseError(f"artifact checksum mismatch for {candidate.artifact.name}")
@@ -289,7 +295,9 @@ def install_candidate(candidate: InstallCandidate, target: Path, service: str | 
             link = target / ".current.new"
             link.symlink_to(release, target_is_directory=True)
             link.replace(current)
-            launcher = Path("/usr/local/bin") / _entrypoint(candidate.package)
+            launcher_root = launcher_dir or Path("/usr/local/bin")
+            launcher_root.mkdir(parents=True, exist_ok=True)
+            launcher = launcher_root / _entrypoint(candidate.package)
             launcher.write_text(f"#!/bin/sh\nexec {current}/.venv/bin/{_entrypoint(candidate.package)} \"$@\"\n", encoding="utf-8")
             launcher.chmod(0o755)
         if restart:
