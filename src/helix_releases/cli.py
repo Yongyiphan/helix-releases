@@ -10,7 +10,7 @@ import tomllib
 
 from . import __version__
 from .catalog import ReleaseError, publish
-from .installer import DEFAULT_SERVICES, default_root, fetch_remote_candidate, install_candidate, latest_candidate, list_candidates, remote_candidates, require_elevation
+from .installer import DEFAULT_RELEASE_CHANNEL, DEFAULT_RELEASE_REPOSITORY, DEFAULT_SERVICES, default_root, fetch_remote_candidate, install_candidate, latest_candidate, list_candidates, remote_candidates, require_elevation
 
 
 def _run(command: list[str], *, cwd: Path, label: str) -> subprocess.CompletedProcess[str]:
@@ -122,10 +122,10 @@ def main(argv=None) -> int:
     packages_parser.add_argument("--catalog", type=Path)
     packages_parser.add_argument("--keep-workspace", action="store_true")
     install_parser = subparsers.add_parser("install", help="privileged bootstrap installation from an HR catalog")
-    install_parser.add_argument("package", help="package alias (hr, hu, hdc), or 'list'")
+    install_parser.add_argument("package", help="package alias, component ID, 'all', or 'list'")
     install_parser.add_argument("--catalog", type=Path, help="local checkout of the public HR catalog")
-    install_parser.add_argument("--repository", default=None, help="public GitHub repository, owner/name")
-    install_parser.add_argument("--channel", default="stable")
+    install_parser.add_argument("--repository", default=None, help=f"override the public catalog (default: {DEFAULT_RELEASE_REPOSITORY})")
+    install_parser.add_argument("--channel", default=DEFAULT_RELEASE_CHANNEL, help=f"override the release channel (default: {DEFAULT_RELEASE_CHANNEL})")
     install_parser.add_argument("--target", type=Path, help="installation root; defaults to the host Helix root")
     install_parser.add_argument("--service", help="service to restart after activation")
     install_parser.add_argument("--no-restart", action="store_true")
@@ -137,16 +137,32 @@ def main(argv=None) -> int:
             return 0
         if args.command == "install":
             require_elevation()
-            repository = args.repository or __import__("os").environ.get("HR_RELEASE_REPOSITORY")
-            if args.catalog is None and not repository:
-                raise ReleaseError("provide --repository owner/name or --catalog PATH")
+            repository = args.repository or __import__("os").environ.get("HR_RELEASE_REPOSITORY") or DEFAULT_RELEASE_REPOSITORY
             if args.package.lower() == "list":
-                if repository:
+                if args.catalog is None:
                     for item in remote_candidates(repository, args.channel):
                         print(f"{item.candidate.package}\t{item.candidate.version}\t{item.candidate.channel}\t{item.manifest_url}")
                 else:
                     for item in list_candidates(args.catalog, args.channel):
                         print(f"{item.package}\t{item.version}\t{item.channel}\t{item.artifact}")
+                return 0
+            if args.package.lower() == "all":
+                candidates = [item.candidate for item in remote_candidates(repository, args.channel)] if args.catalog is None else list_candidates(args.catalog, args.channel)
+                latest = {}
+                for item in candidates:
+                    latest[item.package] = max(latest.get(item.package, item), item, key=lambda value: _version_key(value.version))
+                results = []
+                for item in sorted(latest.values(), key=lambda value: value.package):
+                    if args.catalog is None:
+                        remote = fetch_remote_candidate(repository, item.package, args.channel)
+                        try:
+                            candidate = remote.candidate
+                            results.append(install_candidate(candidate, args.target or default_root(candidate.package), args.service if args.service is not None else DEFAULT_SERVICES.get(candidate.package), restart=not args.no_restart))
+                        finally:
+                            __import__("shutil").rmtree(remote.temporary_root, ignore_errors=True)
+                    else:
+                        results.append(install_candidate(item, args.target or default_root(item.package), args.service if args.service is not None else DEFAULT_SERVICES.get(item.package), restart=not args.no_restart))
+                print(json.dumps(results, indent=2, sort_keys=True))
                 return 0
             if repository:
                 remote = fetch_remote_candidate(repository, args.package, args.channel)
@@ -163,6 +179,14 @@ def main(argv=None) -> int:
     except ReleaseError as exc:
         parser.error(str(exc))
     return 2
+
+
+def _version_key(value: str) -> tuple:
+    parts = []
+    for part in value.split("."):
+        digits = "".join(char for char in part if char.isdigit())
+        parts.append((0, int(digits)) if digits else (1, part))
+    return tuple(parts)
 
 
 if __name__ == "__main__":

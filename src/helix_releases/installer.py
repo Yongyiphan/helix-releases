@@ -47,6 +47,9 @@ PACKAGE_ALIASES = {
     "hdc": "hdc",
 }
 
+DEFAULT_RELEASE_REPOSITORY = "Yongyiphan/helix-releases"
+DEFAULT_RELEASE_CHANNEL = "stable"
+
 DEFAULT_SERVICES = {
     "hdc": "hdc-controller.service",
     "helix-updater": "helix-updater.service",
@@ -54,10 +57,12 @@ DEFAULT_SERVICES = {
 
 
 def canonical_package(value: str) -> str:
-    try:
-        return PACKAGE_ALIASES[value.strip().lower()]
-    except KeyError as exc:
-        raise ReleaseError(f"unsupported Helix install target: {value!r}") from exc
+    normalized = value.strip().lower()
+    if normalized in PACKAGE_ALIASES:
+        return PACKAGE_ALIASES[normalized]
+    if normalized and all(char.isalnum() or char in "-_." for char in normalized):
+        return normalized
+    raise ReleaseError(f"invalid Helix install target: {value!r}")
 
 
 def platform_key() -> str:

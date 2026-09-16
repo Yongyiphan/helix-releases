@@ -43,4 +43,4 @@ def test_aliases_are_canonical():
     assert installer.canonical_package("hr") == "helix-releases"
     assert installer.canonical_package("hu") == "helix-updater"
     with pytest.raises(ReleaseError):
-        installer.canonical_package("unknown")
+        installer.canonical_package("bad/name")

@@ -41,9 +41,11 @@ Once HR itself is available on a host, it can install a published baseline
 from a local clone of the public catalog:
 
 ```bash
-sudo hr install list --catalog /path/to/helix-releases --channel stable
-sudo hr install hu --catalog /path/to/helix-releases --channel stable
-sudo hr install hdc --catalog /path/to/helix-releases --channel stable
+sudo hr install list
+sudo hr install hu
+sudo hr install hdc
+# or install every published component:
+sudo hr install all
 ```
 
 The initial HR bootstrap is necessarily a one-time chicken-and-egg step:
@@ -53,7 +55,10 @@ sudo install/linux/install-hr.sh dist/helix_releases-0.1.0-py3-none-any.whl
 ```
 
 `hr` and `hu` are accepted aliases for `helix-releases` and `helix-updater`.
-Installation is elevated, checksum-verified, versioned, and atomic. HR does
-not require GitHub credentials for this path. After HU is installed and
-configured, normal updates should be performed by HU; HR's install command is
-the bootstrap/recovery interface.
+HR defaults to the public `Yongyiphan/helix-releases` catalog and the `stable`
+channel. `--repository`, `--catalog`, and `--channel` remain available for
+testing, mirrors, and development releases. Installation is elevated,
+checksum-verified, versioned, and atomic. HR does not require GitHub
+credentials for this path. After HU is installed and configured, normal
+updates should be performed by HU; HR's install command is the
+bootstrap/recovery interface.
