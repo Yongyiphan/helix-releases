@@ -1,0 +1,29 @@
+{
+  "artifacts": {
+    "linux-x86_64": {
+      "file": "helix_updater-1.0.5-py3-none-any.whl",
+      "sha256": "f555933b241d27fc61b57ea29b0f3c8f5d668f3ee13625297b818f4966af923d"
+    },
+    "windows-x86_64": {
+      "file": "helix_updater-1.0.5-py3-none-any.whl",
+      "sha256": "f555933b241d27fc61b57ea29b0f3c8f5d668f3ee13625297b818f4966af923d"
+    }
+  },
+  "channel": "stable",
+  "commit": "0220738",
+  "healthcheck": {
+    "type": "service"
+  },
+  "install": {
+    "component": "helix-updater",
+    "strategy": "python_wheel"
+  },
+  "package": "helix-updater",
+  "published_at": "2026-09-16T06:08:53.147794+00:00",
+  "requirements": {},
+  "rollback": {
+    "supported": true
+  },
+  "schema": 1,
+  "version": "1.0.5"
+}
