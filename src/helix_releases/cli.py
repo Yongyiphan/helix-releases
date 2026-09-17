@@ -21,6 +21,13 @@ from .catalog import ReleaseError, publish
 from .installer import DEFAULT_RELEASE_CHANNEL, DEFAULT_RELEASE_REPOSITORY, DEFAULT_SERVICES, default_root, fetch_remote_candidate, install_candidate, latest_candidate, list_candidates, remote_candidates, require_elevation, privileged_command
 
 
+DISPLAY_ALIASES = {
+    "helix-releases": "hr",
+    "helix-updater": "hu",
+    "hdc": "hdc",
+}
+
+
 def _setup_hdc_auth() -> None:
     """Run HDC's interactive auth setup as the invoking user, not root."""
     command = ["hdc", "auth", "setup"]
@@ -158,6 +165,7 @@ def main(argv=None) -> int:
     packages_parser.add_argument("--keep-workspace", action="store_true")
     install_parser = subparsers.add_parser("install", help="privileged bootstrap installation from an HR catalog")
     install_parser.add_argument("package", help="package alias, component ID, 'all', or 'list'")
+    install_parser.add_argument("detail", nargs="?", help="for 'list', show every version of this package")
     install_parser.add_argument("--catalog", type=Path, help="local checkout of the public HR catalog")
     install_parser.add_argument("--repository", default=None, help=f"override the public catalog (default: {DEFAULT_RELEASE_REPOSITORY})")
     install_parser.add_argument("--channel", default=DEFAULT_RELEASE_CHANNEL, help=f"override the release channel (default: {DEFAULT_RELEASE_CHANNEL})")
@@ -194,11 +202,25 @@ def main(argv=None) -> int:
             repository = args.repository or __import__("os").environ.get("HR_RELEASE_REPOSITORY") or DEFAULT_RELEASE_REPOSITORY
             if args.package.lower() == "list":
                 if args.catalog is None:
-                    for item in remote_candidates(repository, args.channel):
-                        print(f"{item.candidate.package}\t{item.candidate.version}\t{item.candidate.channel}\t{item.manifest_url}")
+                    candidates = remote_candidates(repository, args.channel)
+                    if args.detail:
+                        requested = __import__("helix_releases.installer", fromlist=["canonical_package"]).canonical_package(args.detail)
+                        candidates = [item for item in candidates if item.candidate.package == requested]
+                        for item in sorted(candidates, key=lambda value: _version_key(value.candidate.version)):
+                            print(f"{_display_package(item.candidate.package)}\t{item.candidate.version}\t{item.candidate.channel}\t{item.manifest_url}")
+                    else:
+                        latest = {}
+                        for item in candidates:
+                            latest[item.candidate.package] = max(latest.get(item.candidate.package, item), item, key=lambda value: _version_key(value.candidate.version))
+                        for item in sorted(latest.values(), key=lambda value: value.candidate.package):
+                            print(f"{_display_package(item.candidate.package)}\t{item.candidate.version}\t{item.candidate.channel}")
                 else:
-                    for item in list_candidates(args.catalog, args.channel):
-                        print(f"{item.package}\t{item.version}\t{item.channel}\t{item.artifact}")
+                    candidates = list_candidates(args.catalog, args.channel)
+                    if args.detail:
+                        requested = __import__("helix_releases.installer", fromlist=["canonical_package"]).canonical_package(args.detail)
+                        candidates = [item for item in candidates if item.package == requested]
+                    for item in candidates:
+                        print(f"{_display_package(item.package)}\t{item.version}\t{item.channel}" + (f"\t{item.artifact}" if args.detail else ""))
                 return 0
             if args.package.lower() == "all":
                 candidates = [item.candidate for item in remote_candidates(repository, args.channel)] if args.catalog is None else list_candidates(args.catalog, args.channel)
@@ -255,6 +277,11 @@ def _version_key(value: str) -> tuple:
         digits = "".join(char for char in part if char.isdigit())
         parts.append((0, int(digits)) if digits else (1, part))
     return tuple(parts)
+
+
+def _display_package(package: str) -> str:
+    alias = DISPLAY_ALIASES.get(package)
+    return f"{package} ({alias})" if alias and alias != package else package
 
 
 if __name__ == "__main__":
