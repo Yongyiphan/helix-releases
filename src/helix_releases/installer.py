@@ -72,7 +72,7 @@ def platform_key() -> str:
 
 
 def require_elevation() -> None:
-    """Installation is a privileged bootstrap operation on every host."""
+    """Guard the private HU bootstrap helper, never the public HR CLI."""
     if platform.system().lower() == "windows":
         try:
             import ctypes
@@ -83,8 +83,15 @@ def require_elevation() -> None:
         elevated = hasattr(os, "geteuid") and os.geteuid() == 0
     if not elevated:
         if platform.system().lower() == "windows":
-            raise ReleaseError("hr install must be run from an elevated PowerShell")
-        raise ReleaseError("hr install must be run with sudo or as root")
+            raise ReleaseError("HU bootstrap must run from an elevated PowerShell")
+        raise ReleaseError("HU bootstrap must run with sudo or as root")
+
+
+def privileged_command(command: list[str]) -> list[str]:
+    """Return the host elevation wrapper used to invoke HU."""
+    if platform.system().lower() == "windows":
+        raise ReleaseError("Windows HU invocation requires the elevated launcher integration")
+    return ["sudo", *command]
 
 
 def _sha256(path: Path) -> str:
@@ -242,9 +249,13 @@ def _entrypoint(package: str) -> str:
 
 
 def default_root(package: str) -> Path:
+    if package == "helix-updater":
+        name = "updater"
+    else:
+        name = package
     if platform.system().lower() == "windows":
-        return Path(os.environ.get("PROGRAMFILES", r"C:\\Program Files")) / "Helix" / package
-    return Path("/opt/helix") / package
+        return Path(os.environ.get("PROGRAMFILES", r"C:\\Program Files")) / "Helix" / name
+    return Path("/opt/helix") / name
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

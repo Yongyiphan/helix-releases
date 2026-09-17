@@ -44,11 +44,11 @@ Once HR itself is available on a host, it can install a published baseline
 from a local clone of the public catalog:
 
 ```bash
-sudo hr install list
-sudo hr install hu
-sudo hr install hdc
+hr install list
+hr install hu
+hr install hdc
 # or install every published component:
-sudo hr install all
+hr install all
 ```
 
 The initial HR bootstrap is necessarily a one-time chicken-and-egg step:
@@ -60,10 +60,13 @@ sudo install/linux/install-hr.sh dist/helix_releases-0.1.2-py3-none-any.whl
 `hr` and `hu` are accepted aliases for `helix-releases` and `helix-updater`.
 HR defaults to the public `Yongyiphan/helix-releases` catalog and the `stable`
 channel. `--repository`, `--catalog`, and `--channel` remain available for
-testing, mirrors, and development releases. The initial installer is elevated
-only because it bootstraps HU. HR delegates the actual privileged installation,
-verification, activation, health check, and rollback work to HU. HR's normal
-build and publication commands do not require elevation.
+testing, mirrors, and development releases. HR itself stays unprivileged and
+invokes HU through the host elevation mechanism. Only the private HU bootstrap
+is elevated, because it bootstraps HU and performs the first privileged
+activation. After
+bootstrap, HU owns ongoing installation, verification, activation, health checks,
+rollback, and service lifecycle. HR's normal build and publication commands do
+not require elevation.
 
 Recommended GitHub protections are provided in
 `docs/github-ruleset-main.json` and `docs/github-ruleset-release-tags.json`.

@@ -7,6 +7,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 
@@ -17,7 +18,7 @@ except ImportError:  # pragma: no cover - Windows has no pwd module.
 
 from . import __version__
 from .catalog import ReleaseError, publish
-from .installer import DEFAULT_RELEASE_CHANNEL, DEFAULT_RELEASE_REPOSITORY, DEFAULT_SERVICES, default_root, fetch_remote_candidate, install_candidate, latest_candidate, list_candidates, remote_candidates, require_elevation
+from .installer import DEFAULT_RELEASE_CHANNEL, DEFAULT_RELEASE_REPOSITORY, DEFAULT_SERVICES, default_root, fetch_remote_candidate, install_candidate, latest_candidate, list_candidates, remote_candidates, require_elevation, privileged_command
 
 
 def _setup_hdc_auth() -> None:
@@ -35,6 +36,16 @@ def _setup_hdc_auth() -> None:
     result = subprocess.run(command, check=False)
     if result.returncode:
         raise ReleaseError(f"HDC GitHub authentication setup exited with {result.returncode}")
+
+
+def _invoke_hu_update(package: str) -> dict:
+    """Ask the privileged HU service to own a normal production update."""
+    config = "/etc/helix/updater/helix-updater.toml" if platform.system().lower() != "windows" else r"C:\ProgramData\Helix\Updater\helix-updater.toml"
+    command = privileged_command(["helix-updater", "--config", config, "update", package])
+    result = subprocess.run(command, check=False, text=True)
+    if result.returncode:
+        raise ReleaseError(f"HU update for {package} exited with {result.returncode}")
+    return {"package": package, "state": "delegated_to_hu"}
 
 
 def _run(command: list[str], *, cwd: Path, label: str) -> subprocess.CompletedProcess[str]:
@@ -153,14 +164,33 @@ def main(argv=None) -> int:
     install_parser.add_argument("--target", type=Path, help="installation root; defaults to the host Helix root")
     install_parser.add_argument("--service", help="service to restart after activation")
     install_parser.add_argument("--no-restart", action="store_true")
+    bootstrap_parser = subparsers.add_parser("_bootstrap-hu", help=argparse.SUPPRESS)
+    bootstrap_parser.add_argument("--artifact", type=Path, required=True)
+    bootstrap_parser.add_argument("--version", required=True)
+    bootstrap_parser.add_argument("--sha256", required=True)
+    bootstrap_parser.add_argument("--target", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "packages":
             result = packages(args.handoff, args.output, catalog=args.catalog, keep_workspace=args.keep_workspace)
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0
-        if args.command == "install":
+        if args.command == "_bootstrap-hu":
             require_elevation()
+            candidate = __import__("helix_releases.installer", fromlist=["InstallCandidate"]).InstallCandidate("helix-updater", args.version, DEFAULT_RELEASE_CHANNEL, args.artifact, args.sha256)
+            result = install_candidate(candidate, args.target, DEFAULT_SERVICES["helix-updater"])
+            if platform.system().lower() != "windows":
+                config = Path("/etc/helix/updater/helix-updater.toml")
+                config.parent.mkdir(parents=True, exist_ok=True)
+                config.write_text('updater_version = "1.0.6"\nstate_root = "/var/lib/helix/updater"\ndownload_root = "/var/cache/helix/updater"\n\n[packages.helix-updater]\nenabled = true\nchannel = "stable"\n[packages.helix-updater.source]\ntype = "public"\nrepository = "Yongyiphan/helix-releases"\n[packages.helix-updater.target]\ncomponent = "helix-updater"\nroot = "/opt/helix/updater"\nservice = "helix-updater.service"\n\n[packages.hdc]\nenabled = true\nchannel = "stable"\n[packages.hdc.source]\ntype = "public"\nrepository = "Yongyiphan/helix-releases"\n[packages.hdc.target]\ncomponent = "hdc"\nroot = "/opt/helix/hdc"\nservice = "hdc-controller.service"\n', encoding="utf-8")
+                unit = Path("/etc/systemd/system/helix-updater.service")
+                unit.write_text("[Unit]\nDescription=Helix Updater\nAfter=network-online.target\n\n[Service]\nType=simple\nUser=root\nExecStart=/opt/helix/updater/current/.venv/bin/helix-updater --config /etc/helix/updater/helix-updater.toml serve\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n", encoding="utf-8")
+                subprocess.run(("systemctl", "daemon-reload"), check=True)
+                subprocess.run(("systemctl", "enable", "helix-updater.service"), check=True)
+                subprocess.run(("systemctl", "restart", "helix-updater.service"), check=True)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.command == "install":
             repository = args.repository or __import__("os").environ.get("HR_RELEASE_REPOSITORY") or DEFAULT_RELEASE_REPOSITORY
             if args.package.lower() == "list":
                 if args.catalog is None:
@@ -176,16 +206,17 @@ def main(argv=None) -> int:
                 for item in candidates:
                     latest[item.package] = max(latest.get(item.package, item), item, key=lambda value: _version_key(value.version))
                 results = []
-                for item in sorted(latest.values(), key=lambda value: value.package):
+                # HU must exist before any other package can be delegated to it.
+                for item in sorted(latest.values(), key=lambda value: (value.package != "helix-updater", value.package)):
                     if args.catalog is None:
                         remote = fetch_remote_candidate(repository, item.package, args.channel)
                         try:
                             candidate = remote.candidate
-                            results.append(install_candidate(candidate, args.target or default_root(candidate.package), args.service if args.service is not None else DEFAULT_SERVICES.get(candidate.package), restart=not args.no_restart))
+                            results.append(_bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package))
                         finally:
                             __import__("shutil").rmtree(remote.temporary_root, ignore_errors=True)
                     else:
-                        results.append(install_candidate(item, args.target or default_root(item.package), args.service if args.service is not None else DEFAULT_SERVICES.get(item.package), restart=not args.no_restart))
+                        results.append(_bootstrap_hu(item, args.target) if item.package == "helix-updater" else _invoke_hu_update(item.package))
                 if any(item["package"] == "hdc" for item in results):
                     _setup_hdc_auth()
                 print(json.dumps(results, indent=2, sort_keys=True))
@@ -194,12 +225,12 @@ def main(argv=None) -> int:
                 remote = fetch_remote_candidate(repository, args.package, args.channel)
                 try:
                     candidate = remote.candidate
-                    result = install_candidate(candidate, args.target or default_root(candidate.package), args.service if args.service is not None else DEFAULT_SERVICES.get(candidate.package), restart=not args.no_restart)
+                    result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package)
                 finally:
                     __import__("shutil").rmtree(remote.temporary_root, ignore_errors=True)
             else:
                 candidate = latest_candidate(args.catalog, args.package, args.channel)
-                result = install_candidate(candidate, args.target or default_root(candidate.package), args.service if args.service is not None else DEFAULT_SERVICES.get(candidate.package), restart=not args.no_restart)
+                result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package)
             if candidate.package == "hdc":
                 _setup_hdc_auth()
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -207,6 +238,15 @@ def main(argv=None) -> int:
     except ReleaseError as exc:
         parser.error(str(exc))
     return 2
+
+
+def _bootstrap_hu(candidate, target: Path | None) -> dict:
+    target = target or default_root(candidate.package)
+    command = privileged_command([sys.executable, "-m", "helix_releases.cli", "_bootstrap-hu", "--artifact", str(candidate.artifact), "--version", candidate.version, "--sha256", candidate.sha256, "--target", str(target)])
+    result = subprocess.run(command, check=False, text=True)
+    if result.returncode:
+        raise ReleaseError(f"HU bootstrap exited with {result.returncode}")
+    return {"package": candidate.package, "version": candidate.version, "state": "bootstrapped"}
 
 
 def _version_key(value: str) -> tuple:
