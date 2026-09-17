@@ -1,7 +1,8 @@
 # Helix Releases (HR)
 
-HR is the on-demand build and publication factory for Helix components. It is
-not a runtime service and it does not install production software.
+HR is the on-demand build, publication, and public installation interface for
+Helix components. It is not a background runtime service. HR and HU are
+distributed together, while HU remains the privileged installation engine.
 
 The release ownership is deliberately split:
 
@@ -32,8 +33,10 @@ releases/<package>/<version>/<artifact>
 This allows HC, HEP, HDC, HR, and HU to release independently while sharing
 one public repository. HU selects only packages subscribed on its host.
 
-HR currently publishes to a local catalog checkout. A later GitHub adapter may
-commit and push this same layout; HR must not contain GitHub credentials.
+HR publishes this layout to the public GitHub repository using the publisher's
+authenticated Git transport. HR installation reads it anonymously. HDC and HR
+may use the operator's authenticated `gh` context; HU never receives those
+write credentials.
 
 ## Privileged bootstrap installation
 
@@ -51,14 +54,19 @@ sudo hr install all
 The initial HR bootstrap is necessarily a one-time chicken-and-egg step:
 
 ```bash
-sudo install/linux/install-hr.sh dist/helix_releases-0.1.0-py3-none-any.whl
+sudo install/linux/install-hr.sh dist/helix_releases-0.1.2-py3-none-any.whl
 ```
 
 `hr` and `hu` are accepted aliases for `helix-releases` and `helix-updater`.
 HR defaults to the public `Yongyiphan/helix-releases` catalog and the `stable`
 channel. `--repository`, `--catalog`, and `--channel` remain available for
-testing, mirrors, and development releases. Installation is elevated,
-checksum-verified, versioned, and atomic. HR does not require GitHub
-credentials for this path. After HU is installed and configured, normal
-updates should be performed by HU; HR's install command is the
-bootstrap/recovery interface.
+testing, mirrors, and development releases. The initial installer is elevated
+only because it bootstraps HU. HR delegates the actual privileged installation,
+verification, activation, health check, and rollback work to HU. HR's normal
+build and publication commands do not require elevation.
+
+Recommended GitHub protections are provided in
+`docs/github-ruleset-main.json` and `docs/github-ruleset-release-tags.json`.
+Import both under Settings → Rules → Rulesets. With the `main` ruleset
+enabled, publication must use a branch and pull request rather than push
+directly to `main`.

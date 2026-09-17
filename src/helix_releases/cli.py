@@ -2,15 +2,39 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import tempfile
 import tomllib
 
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows has no pwd module.
+    pwd = None
+
 from . import __version__
 from .catalog import ReleaseError, publish
 from .installer import DEFAULT_RELEASE_CHANNEL, DEFAULT_RELEASE_REPOSITORY, DEFAULT_SERVICES, default_root, fetch_remote_candidate, install_candidate, latest_candidate, list_candidates, remote_candidates, require_elevation
+
+
+def _setup_hdc_auth() -> None:
+    """Run HDC's interactive auth setup as the invoking user, not root."""
+    command = ["hdc", "auth", "setup"]
+    if platform.system().lower() != "windows" and hasattr(os, "geteuid") and os.geteuid() == 0:
+        invoking_user = os.environ.get("SUDO_USER", "").strip()
+        if invoking_user:
+            try:
+                home = pwd.getpwnam(invoking_user).pw_dir if pwd is not None else ""
+            except KeyError as exc:
+                raise ReleaseError(f"cannot resolve the invoking user for HDC GitHub authentication: {invoking_user}") from exc
+            command = ["runuser", "-u", invoking_user, "--", "env", f"HOME={home}", "hdc", "auth", "setup"]
+    print("HDC GitHub authentication setup follows. Existing gh status and login responses will be rendered below.")
+    result = subprocess.run(command, check=False)
+    if result.returncode:
+        raise ReleaseError(f"HDC GitHub authentication setup exited with {result.returncode}")
 
 
 def _run(command: list[str], *, cwd: Path, label: str) -> subprocess.CompletedProcess[str]:
@@ -162,6 +186,8 @@ def main(argv=None) -> int:
                             __import__("shutil").rmtree(remote.temporary_root, ignore_errors=True)
                     else:
                         results.append(install_candidate(item, args.target or default_root(item.package), args.service if args.service is not None else DEFAULT_SERVICES.get(item.package), restart=not args.no_restart))
+                if any(item["package"] == "hdc" for item in results):
+                    _setup_hdc_auth()
                 print(json.dumps(results, indent=2, sort_keys=True))
                 return 0
             if repository:
@@ -174,6 +200,8 @@ def main(argv=None) -> int:
             else:
                 candidate = latest_candidate(args.catalog, args.package, args.channel)
                 result = install_candidate(candidate, args.target or default_root(candidate.package), args.service if args.service is not None else DEFAULT_SERVICES.get(candidate.package), restart=not args.no_restart)
+            if candidate.package == "hdc":
+                _setup_hdc_auth()
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0
     except ReleaseError as exc:
