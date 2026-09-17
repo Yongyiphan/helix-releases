@@ -51,10 +51,10 @@ hr install hdc
 hr install all
 ```
 
-The initial HR bootstrap is necessarily a one-time chicken-and-egg step:
+The initial HR bootstrap is a self-fetching, verified one-time bootstrap:
 
 ```bash
-sudo install/linux/install-hr.sh dist/helix_releases-0.1.2-py3-none-any.whl
+curl -fsSL https://raw.githubusercontent.com/Yongyiphan/helix-releases/main/install/linux/install.sh | sudo bash
 ```
 
 `hr` and `hu` are accepted aliases for `helix-releases` and `helix-updater`.
@@ -67,6 +67,20 @@ activation. After
 bootstrap, HU owns ongoing installation, verification, activation, health checks,
 rollback, and service lifecycle. HR's normal build and publication commands do
 not require elevation.
+
+The installer pins the public catalog branch, checks that its latest commit is
+GitHub-verified and associated with `Yongyiphan`, validates HR's manifest and
+provenance, verifies the artifact SHA-256, and only then installs HR. The
+Windows equivalent is `install/windows/install.ps1`.
+
+To remove Helix installations:
+
+```bash
+sudo install/linux/uninstall.sh
+sudo install/linux/uninstall.sh --purge-state
+```
+
+The default preserves HDC and HU state; `--purge-state` removes it too.
 
 Recommended GitHub protections are provided in
 `docs/github-ruleset-main.json` and `docs/github-ruleset-release-tags.json`.
