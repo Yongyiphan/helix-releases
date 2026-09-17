@@ -1,0 +1,29 @@
+{
+  "artifacts": {
+    "linux-x86_64": {
+      "file": "hdc-1.3.2-py3-none-any.whl",
+      "sha256": "188d0005ae404f29af6dae22e9eaca152547b7566e14db12f56b1a5526615e4c"
+    },
+    "windows-x86_64": {
+      "file": "hdc-1.3.2-py3-none-any.whl",
+      "sha256": "188d0005ae404f29af6dae22e9eaca152547b7566e14db12f56b1a5526615e4c"
+    }
+  },
+  "channel": "stable",
+  "commit": "7188831",
+  "healthcheck": {
+    "type": "service"
+  },
+  "install": {
+    "component": "hdc",
+    "strategy": "python_wheel"
+  },
+  "package": "hdc",
+  "published_at": "2026-09-17T01:38:53.786682+00:00",
+  "requirements": {},
+  "rollback": {
+    "supported": true
+  },
+  "schema": 1,
+  "version": "1.3.2"
+}
