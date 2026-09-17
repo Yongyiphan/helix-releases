@@ -303,6 +303,8 @@ def install_candidate(candidate: InstallCandidate, target: Path, service: str | 
         _run([str(pip), "install", "--no-cache-dir", "--force-reinstall", str(candidate.artifact)])
         (staged / ".artifact.sha256").write_text(actual + "\n", encoding="utf-8")
         staged.rename(release)
+        if platform.system().lower() != "windows":
+            _relocate_python_scripts(release / ".venv", staged / ".venv")
         current = target / "current"
         if platform.system().lower() == "windows":
             state = target / "installation.json"
@@ -324,3 +326,20 @@ def install_candidate(candidate: InstallCandidate, target: Path, service: str | 
         raise
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
+
+
+def _relocate_python_scripts(runtime: Path, old_runtime: Path) -> None:
+    """Repair Unix venv shebangs after a staged runtime is renamed."""
+    script_dir = runtime / "bin"
+    if not script_dir.is_dir():
+        raise ReleaseError(f"Python runtime scripts are missing: {script_dir}")
+    old_prefix, new_prefix = str(old_runtime), str(runtime)
+    for script in script_dir.iterdir():
+        if not script.is_file() or script.suffix == ".exe":
+            continue
+        try:
+            content = script.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if content.startswith("#!") and old_prefix in content:
+            script.write_text(content.replace(old_prefix, new_prefix), encoding="utf-8")
