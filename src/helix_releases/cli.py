@@ -46,10 +46,14 @@ def _setup_hdc_auth() -> None:
         raise ReleaseError(f"HDC GitHub authentication setup exited with {result.returncode}")
 
 
-def _invoke_hu_update(package: str) -> dict:
+def _invoke_hu_update(package: str, catalog: Path | None = None) -> dict:
     """Ask the privileged HU service to own a normal production update."""
     config = "/etc/helix/updater/helix-updater.toml" if platform.system().lower() != "windows" else r"C:\ProgramData\Helix\Updater\helix-updater.toml"
-    command = privileged_command(["helix-updater", "--config", config, "update", package])
+    command = ["helix-updater", "--config", config]
+    if catalog is not None:
+        command.extend(["--catalog", str(catalog)])
+    command.extend(["update", package])
+    command = privileged_command(command)
     result = subprocess.run(command, check=False, text=True)
     if result.returncode:
         raise ReleaseError(f"HU update for {package} exited with {result.returncode}")
@@ -260,11 +264,11 @@ def main(argv=None) -> int:
                         remote = fetch_remote_candidate(repository, item.package, args.channel)
                         try:
                             candidate = remote.candidate
-                            results.append(_bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package))
+                            results.append(_bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package, args.catalog))
                         finally:
                             __import__("shutil").rmtree(remote.temporary_root, ignore_errors=True)
                     else:
-                        results.append(_bootstrap_hu(item, args.target) if item.package == "helix-updater" else _invoke_hu_update(item.package))
+                        results.append(_bootstrap_hu(item, args.target) if item.package == "helix-updater" else _invoke_hu_update(item.package, args.catalog))
                 if any(item["package"] == "hdc" for item in results):
                     _setup_hdc_auth()
                 print(json.dumps(results, indent=2, sort_keys=True))
@@ -273,12 +277,12 @@ def main(argv=None) -> int:
                 remote = fetch_remote_candidate(repository, args.package, args.channel)
                 try:
                     candidate = remote.candidate
-                    result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package)
+                    result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package, args.catalog)
                 finally:
                     __import__("shutil").rmtree(remote.temporary_root, ignore_errors=True)
             else:
                 candidate = latest_candidate(args.catalog, args.package, args.channel)
-                result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package)
+                result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package, args.catalog)
             if candidate.package == "hdc":
                 _setup_hdc_auth()
             print(json.dumps(result, indent=2, sort_keys=True))

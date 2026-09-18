@@ -41,3 +41,8 @@ The older `releases/<component>/<version>/` folder layout remains a read-compati
 migration. New HR publication uses `hr packages <handoff-path>` by default; use
 `--no-publish-release` for a local-only rehearsal. Catalog commits are only needed when explicitly
 requesting the legacy mirror with `--catalog`.
+
+During stabilization, a local HR catalog may be consumed by the persistent HU development runtime.
+After validation, `hr install <component> --catalog <catalog>` explicitly promotes the same local
+artifact through production HU. This temporary promotion path does not publish a GitHub Release;
+public publication remains a later, separate gate.
