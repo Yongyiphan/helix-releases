@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ElementTree
 import venv
 
 from .catalog import ReleaseError
+from .install_lock import installation_lock
 
 
 @dataclass(frozen=True)
@@ -403,51 +404,52 @@ def _restart_service(service: str | None) -> None:
 
 
 def install_candidate(candidate: InstallCandidate, target: Path, service: str | None = None, *, restart: bool = True, launcher_dir: Path | None = None) -> dict:
-    actual = _sha256(candidate.artifact)
-    if actual != candidate.sha256:
-        raise ReleaseError(f"artifact checksum mismatch for {candidate.artifact.name}")
-    target = target.expanduser().resolve()
-    release = target / "releases" / candidate.version
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "releases").mkdir(parents=True, exist_ok=True)
-    if release.exists():
-        existing = release / ".artifact.sha256"
-        if existing.is_file() and existing.read_text(encoding="utf-8").strip() == actual:
-            return {"package": candidate.package, "version": candidate.version, "state": "already_installed", "path": str(release)}
-        raise ReleaseError(f"release already exists with different contents: {release}")
-    temporary = Path(tempfile.mkdtemp(prefix=f"{candidate.package}-", dir=target))
-    staged = temporary / candidate.version
-    try:
-        staged.mkdir()
-        environment = staged / ".venv"
-        venv.EnvBuilder(with_pip=True, clear=True).create(environment)
-        pip = environment / ("Scripts" if platform.system().lower() == "windows" else "bin") / ("pip.exe" if platform.system().lower() == "windows" else "pip")
-        _run([str(pip), "install", "--no-cache-dir", "--force-reinstall", str(candidate.artifact)])
-        (staged / ".artifact.sha256").write_text(actual + "\n", encoding="utf-8")
-        staged.rename(release)
-        if platform.system().lower() != "windows":
-            _relocate_python_scripts(release / ".venv", staged / ".venv")
-        current = target / "current"
-        if platform.system().lower() == "windows":
-            state = target / "installation.json"
-            state.write_text(json.dumps({"schema": 1, "active": str(release), "package": candidate.package}, indent=2) + "\n", encoding="utf-8")
-        else:
-            link = target / ".current.new"
-            link.symlink_to(release, target_is_directory=True)
-            link.replace(current)
-            launcher_root = launcher_dir or Path("/usr/local/bin")
-            launcher_root.mkdir(parents=True, exist_ok=True)
-            launcher = launcher_root / _entrypoint(candidate.package)
-            launcher.write_text(f"#!/bin/sh\nexec {current}/.venv/bin/{_entrypoint(candidate.package)} \"$@\"\n", encoding="utf-8")
-            launcher.chmod(0o755)
-        if restart:
-            _restart_service(service)
-        return {"package": candidate.package, "version": candidate.version, "state": "installed", "path": str(release), "sha256": actual}
-    except Exception:
-        shutil.rmtree(staged, ignore_errors=True)
-        raise
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
+    with installation_lock():
+        actual = _sha256(candidate.artifact)
+        if actual != candidate.sha256:
+            raise ReleaseError(f"artifact checksum mismatch for {candidate.artifact.name}")
+        target = target.expanduser().resolve()
+        release = target / "releases" / candidate.version
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "releases").mkdir(parents=True, exist_ok=True)
+        if release.exists():
+            existing = release / ".artifact.sha256"
+            if existing.is_file() and existing.read_text(encoding="utf-8").strip() == actual:
+                return {"package": candidate.package, "version": candidate.version, "state": "already_installed", "path": str(release)}
+            raise ReleaseError(f"release already exists with different contents: {release}")
+        temporary = Path(tempfile.mkdtemp(prefix=f"{candidate.package}-", dir=target))
+        staged = temporary / candidate.version
+        try:
+            staged.mkdir()
+            environment = staged / ".venv"
+            venv.EnvBuilder(with_pip=True, clear=True).create(environment)
+            pip = environment / ("Scripts" if platform.system().lower() == "windows" else "bin") / ("pip.exe" if platform.system().lower() == "windows" else "pip")
+            _run([str(pip), "install", "--no-cache-dir", "--force-reinstall", str(candidate.artifact)])
+            (staged / ".artifact.sha256").write_text(actual + "\n", encoding="utf-8")
+            staged.rename(release)
+            if platform.system().lower() != "windows":
+                _relocate_python_scripts(release / ".venv", staged / ".venv")
+            current = target / "current"
+            if platform.system().lower() == "windows":
+                state = target / "installation.json"
+                state.write_text(json.dumps({"schema": 1, "active": str(release), "package": candidate.package}, indent=2) + "\n", encoding="utf-8")
+            else:
+                link = target / ".current.new"
+                link.symlink_to(release, target_is_directory=True)
+                link.replace(current)
+                launcher_root = launcher_dir or Path("/usr/local/bin")
+                launcher_root.mkdir(parents=True, exist_ok=True)
+                launcher = launcher_root / _entrypoint(candidate.package)
+                launcher.write_text(f"#!/bin/sh\nexec {current}/.venv/bin/{_entrypoint(candidate.package)} \"$@\"\n", encoding="utf-8")
+                launcher.chmod(0o755)
+            if restart:
+                _restart_service(service)
+            return {"package": candidate.package, "version": candidate.version, "state": "installed", "path": str(release), "sha256": actual}
+        except Exception:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
 
 
 def _relocate_python_scripts(runtime: Path, old_runtime: Path) -> None:
