@@ -8,6 +8,10 @@ Protocol version 1 uses two JSON records:
 4. HR copies the exact source checkout into a temporary workspace, runs every test command,
    executes the build command, validates exactly one wheel, and publishes a manifest/checksum.
 
+Before publication, the installed HR wheel must also pass a disposable rehearsal. The rehearsal
+installs HR into a temporary virtual environment and runs a handoff against a temporary component;
+it must not depend on the source checkout's sibling HDC/HU repositories or mutate a production root.
+
 The handoff is not a shell script. Commands are argument arrays and execute with `shell=False`.
 This keeps HR reproducible and prevents a release contract from becoming an unreviewed arbitrary
 privileged command path.
