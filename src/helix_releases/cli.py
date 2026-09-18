@@ -17,7 +17,7 @@ except ImportError:  # pragma: no cover - Windows has no pwd module.
     pwd = None
 
 from . import __version__
-from .catalog import ReleaseError, publish
+from .catalog import ReleaseError, publish, publish_github_release
 from .installer import DEFAULT_RELEASE_CHANNEL, DEFAULT_RELEASE_REPOSITORY, DEFAULT_SERVICES, default_root, fetch_remote_candidate, install_candidate, latest_candidate, list_candidates, remote_candidates, require_elevation, privileged_command
 
 
@@ -100,7 +100,9 @@ def _validate_local_contract(handoff: dict) -> None:
         raise ReleaseError("HDC handoff was generated from a different HR contract")
 
 
-def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None, keep_workspace: bool = False) -> dict:
+def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None,
+             publish_release: bool = False, repository: str = DEFAULT_RELEASE_REPOSITORY,
+             keep_workspace: bool = False) -> dict:
     handoff = _load_handoff(handoff_path)
     _validate_local_contract(handoff)
     source = Path(handoff["source_root"]).resolve()
@@ -133,6 +135,22 @@ def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None, k
             result.update({"published": True, "manifest": str(published.manifest), "sha256": published.sha256})
         else:
             result["published"] = False
+        if publish_release:
+            published = publish_github_release(
+                repository=repository,
+                package=handoff["component"],
+                version=handoff["version"],
+                channel=handoff.get("channel", "dev"),
+                commit=commit,
+                artifact=artifacts[0],
+            )
+            result.update({
+                "published_release": True,
+                "release_repository": repository,
+                "release_tag": published.tag,
+                "manifest_asset": published.manifest_file,
+                "sha256": published.sha256,
+            })
         return result
     finally:
         if not keep_workspace:
@@ -162,6 +180,10 @@ def main(argv=None) -> int:
     packages_parser.add_argument("handoff", type=Path)
     packages_parser.add_argument("--output", type=Path, default=Path("dist"))
     packages_parser.add_argument("--catalog", type=Path)
+    publish_group = packages_parser.add_mutually_exclusive_group()
+    publish_group.add_argument("--publish-release", dest="publish_release", action="store_true", default=None, help="publish artifact and HU manifest as a GitHub Release")
+    publish_group.add_argument("--no-publish-release", dest="publish_release", action="store_false", default=None, help="build and test without publishing")
+    packages_parser.add_argument("--repository", default=DEFAULT_RELEASE_REPOSITORY, help="GitHub repository for --publish-release")
     packages_parser.add_argument("--keep-workspace", action="store_true")
     install_parser = subparsers.add_parser("install", help="privileged bootstrap installation from an HR catalog")
     install_parser.add_argument("package", help="package alias, component ID, 'all', or 'list'")
@@ -180,7 +202,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "packages":
-            result = packages(args.handoff, args.output, catalog=args.catalog, keep_workspace=args.keep_workspace)
+            publish_release = args.publish_release if args.publish_release is not None else args.catalog is None
+            result = packages(args.handoff, args.output, catalog=args.catalog, publish_release=publish_release, repository=args.repository, keep_workspace=args.keep_workspace)
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0
         if args.command == "_bootstrap-hu":
@@ -190,7 +213,7 @@ def main(argv=None) -> int:
             if platform.system().lower() != "windows":
                 config = Path("/etc/helix/updater/helix-updater.toml")
                 config.parent.mkdir(parents=True, exist_ok=True)
-                config.write_text('updater_version = "1.0.6"\nstate_root = "/var/lib/helix/updater"\ndownload_root = "/var/cache/helix/updater"\n\n[packages.helix-updater]\nenabled = true\nchannel = "stable"\n[packages.helix-updater.source]\ntype = "public"\nrepository = "Yongyiphan/helix-releases"\n[packages.helix-updater.target]\ncomponent = "helix-updater"\nroot = "/opt/helix/updater"\nservice = "helix-updater.service"\n\n[packages.hdc]\nenabled = true\nchannel = "stable"\n[packages.hdc.source]\ntype = "public"\nrepository = "Yongyiphan/helix-releases"\n[packages.hdc.target]\ncomponent = "hdc"\nroot = "/opt/helix/hdc"\nservice = "hdc-controller.service"\n', encoding="utf-8")
+                config.write_text(f'updater_version = "{__version__}"\nstate_root = "/var/lib/helix/updater"\ndownload_root = "/var/cache/helix/updater"\n\n[packages.helix-updater]\nenabled = true\nchannel = "stable"\n[packages.helix-updater.source]\ntype = "release"\nrepository = "Yongyiphan/helix-releases"\n[packages.helix-updater.target]\ncomponent = "helix-updater"\nroot = "/opt/helix/updater"\nservice = "helix-updater.service"\n\n[packages.hdc]\nenabled = true\nchannel = "stable"\n[packages.hdc.source]\ntype = "release"\nrepository = "Yongyiphan/helix-releases"\n[packages.hdc.target]\ncomponent = "hdc"\nroot = "/opt/helix/hdc"\nservice = "hdc-controller.service"\n', encoding="utf-8")
                 unit = Path("/etc/systemd/system/helix-updater.service")
                 unit.write_text("[Unit]\nDescription=Helix Updater\nAfter=network-online.target\n\n[Service]\nType=simple\nUser=root\nExecStart=/opt/helix/updater/current/.venv/bin/helix-updater --config /etc/helix/updater/helix-updater.toml serve\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n", encoding="utf-8")
                 subprocess.run(("systemctl", "daemon-reload"), check=True)

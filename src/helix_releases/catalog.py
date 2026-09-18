@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import subprocess
 from typing import Iterable
 
 
@@ -25,6 +26,17 @@ class PublishedArtifact:
     manifest: Path
 
 
+@dataclass(frozen=True)
+class PublishedGitHubRelease:
+    package: str
+    version: str
+    channel: str
+    tag: str
+    file: str
+    sha256: str
+    manifest_file: str
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -33,6 +45,34 @@ def _safe_name(value: str) -> str:
     if not value or Path(value).name != value or value in {".", ".."} or any(char in value for char in "/\\"):
         raise ReleaseError(f"invalid release filename: {value!r}")
     return value
+
+
+def release_tag(package: str, version: str) -> str:
+    package_name = _safe_name(package)
+    version_name = _safe_name(version)
+    return f"{package_name}-v{version_name}"
+
+
+def _manifest(
+    *, package: str, version: str, channel: str, commit: str, filename: str,
+    digest: str, updater_requirement: str | None = None,
+) -> dict:
+    return {
+        "schema": 1,
+        "package": package,
+        "version": version,
+        "channel": channel,
+        "commit": commit,
+        "published_at": _now(),
+        "artifacts": {
+            "linux-x86_64": {"file": filename, "sha256": digest},
+            "windows-x86_64": {"file": filename, "sha256": digest},
+        },
+        "requirements": {"updater": updater_requirement} if updater_requirement else {},
+        "healthcheck": {"type": "service"},
+        "rollback": {"supported": True},
+        "install": {"strategy": "python_wheel", "component": package},
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -74,29 +114,47 @@ def publish(
     temporary = destination.with_suffix(destination.suffix + ".new")
     shutil.copyfile(artifact, temporary)
     temporary.replace(destination)
-    manifest = {
-        "schema": 1,
-        "package": package,
-        "version": version,
-        "channel": channel,
-        "commit": commit,
-        "published_at": _now(),
-        "artifacts": {
-            "linux-x86_64": {"file": filename, "sha256": digest},
-            "windows-x86_64": {"file": filename, "sha256": digest},
-        },
-        "requirements": {"updater": updater_requirement} if updater_requirement else {},
-        # HU's first contract uses the platform service boundary for the
-        # post-activation check. Components without a service must provide a
-        # later explicit health-check contract rather than inventing one.
-        "healthcheck": {"type": "service"},
-        "rollback": {"supported": True},
-        "install": {"strategy": "python_wheel", "component": package},
-    }
+    manifest = _manifest(package=package, version=version, channel=channel, commit=commit,
+                         filename=filename, digest=digest, updater_requirement=updater_requirement)
     temporary_manifest = existing.with_suffix(".json.new")
     temporary_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary_manifest.replace(existing)
     return PublishedArtifact(package, version, channel, filename, digest, commit, existing)
+
+
+def publish_github_release(
+    *, repository: str, package: str, version: str, channel: str, commit: str,
+    artifact: Path, updater_requirement: str | None = None,
+    runner=subprocess.run,
+) -> PublishedGitHubRelease:
+    """Publish one immutable component release through the authenticated gh CLI.
+
+    The release contains the artifact and its HU manifest. No catalog commit is
+    required; the public GitHub Releases API is the discovery surface.
+    """
+    if not artifact.is_file():
+        raise ReleaseError(f"artifact does not exist: {artifact}")
+    if not repository or repository.count("/") != 1:
+        raise ReleaseError(f"invalid GitHub repository: {repository!r}")
+    filename = _safe_name(artifact.name)
+    tag = release_tag(package, version)
+    manifest_name = f"{package}-{version}.manifest.json"
+    digest = _sha256(artifact)
+    manifest = _manifest(package=package, version=version, channel=channel, commit=commit,
+                         filename=filename, digest=digest, updater_requirement=updater_requirement)
+    with tempfile.TemporaryDirectory(prefix="hr-release-") as directory:
+        manifest_path = Path(directory) / manifest_name
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        command = [
+            "gh", "release", "create", tag, str(artifact), str(manifest_path),
+            "--repo", repository, "--title", f"{package} {version}",
+            "--notes", f"Helix {package} {version} ({channel})", "--target", commit,
+        ]
+        result = runner(command, check=False, capture_output=True, text=True)
+        if result.returncode:
+            detail = (result.stderr or result.stdout or "gh release create failed").strip()
+            raise ReleaseError(detail[-2000:])
+    return PublishedGitHubRelease(package, version, channel, tag, filename, digest, manifest_name)
 
 
 def catalog_manifests(root: Path) -> Iterable[Path]:
