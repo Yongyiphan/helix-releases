@@ -125,6 +125,7 @@ def publish(
 def publish_github_release(
     *, repository: str, package: str, version: str, channel: str, commit: str,
     artifact: Path, updater_requirement: str | None = None,
+    target: str = "main",
     runner=subprocess.run,
 ) -> PublishedGitHubRelease:
     """Publish one immutable component release through the authenticated gh CLI.
@@ -148,7 +149,7 @@ def publish_github_release(
         command = [
             "gh", "release", "create", tag, str(artifact), str(manifest_path),
             "--repo", repository, "--title", f"{package} {version}",
-            "--notes", f"Helix {package} {version} ({channel})", "--target", commit,
+            "--notes", f"Helix {package} {version} ({channel})", "--target", target,
         ]
         result = runner(command, check=False, capture_output=True, text=True)
         if result.returncode:
