@@ -8,6 +8,16 @@ Protocol version 1 uses two JSON records:
 4. HR copies the exact source checkout into a temporary workspace, runs every test command,
    executes the build command, validates exactly one wheel, and publishes a manifest/checksum.
 
+Before publication, the installed HR wheel must also pass a disposable rehearsal. The rehearsal
+installs HR into a temporary virtual environment and runs a handoff against a temporary component;
+it must not depend on the source checkout's sibling HDC/HU repositories or mutate a production root.
+
+HR and HU share a cross-process installation lock (`/run/helix/install.lock` on Linux; the
+equivalent shared path on Windows). HR's privileged bootstrap, HU staging, and HU activation hold
+this lock across their mutation boundary. Rehearsals override it with a temporary path via
+`HELIX_INSTALL_LOCK_PATH` and exercise two concurrent requests for the same artifact. An identical
+already-staged artifact is idempotent; a same-version artifact with a different digest is rejected.
+
 The handoff is not a shell script. Commands are argument arrays and execute with `shell=False`.
 This keeps HR reproducible and prevents a release contract from becoming an unreviewed arbitrary
 privileged command path.
