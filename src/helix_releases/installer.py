@@ -13,6 +13,7 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ElementTree
 import venv
 
 from .catalog import ReleaseError
@@ -174,6 +175,14 @@ def _public_json(url: str):
         raise ReleaseError(f"public HR catalog returned invalid JSON: {url}") from exc
 
 
+def _public_bytes(url: str) -> bytes:
+    try:
+        with _public_get(url) as response:
+            return response.read()
+    except OSError as exc:
+        raise ReleaseError(f"public HR catalog request failed: {url}") from exc
+
+
 def remote_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
     try:
         releases = github_release_candidates(repository, channel)
@@ -197,7 +206,10 @@ def remote_candidates(repository: str, channel: str = "stable") -> list[RemoteCa
 def github_release_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
     owner, name = _repository(repository)
     url = f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/releases?per_page=100"
-    releases = _public_json(url)
+    try:
+        releases = _public_json(url)
+    except ReleaseError:
+        return github_atom_release_candidates(repository, channel)
     if not isinstance(releases, list):
         raise ReleaseError("GitHub releases response is invalid")
     result: list[RemoteCandidate] = []
@@ -238,6 +250,46 @@ def github_release_candidates(repository: str, channel: str = "stable") -> list[
                 manifest_url,
                 artifact_url,
             ))
+        except (ReleaseError, AttributeError, TypeError):
+            continue
+    return result
+
+
+def github_atom_release_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
+    owner, name = _repository(repository)
+    feed_url = f"https://github.com/{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/releases.atom"
+    try:
+        root = ElementTree.fromstring(_public_bytes(feed_url))
+    except (ElementTree.ParseError, ReleaseError) as exc:
+        raise ReleaseError("public GitHub Releases feed is invalid") from exc
+    namespace = {"atom": "http://www.w3.org/2005/Atom"}
+    result: list[RemoteCandidate] = []
+    for entry in root.findall("atom:entry", namespace):
+        link = entry.find("atom:link", namespace)
+        href = link.get("href") if link is not None else None
+        if not isinstance(href, str) or "/releases/tag/" not in href:
+            continue
+        tag = urllib.parse.unquote(href.rsplit("/releases/tag/", 1)[1].strip("/"))
+        if "-v" not in tag:
+            continue
+        package, version = tag.rsplit("-v", 1)
+        if not package or not version:
+            continue
+        manifest_name = f"{package}-{version}.manifest.json"
+        manifest_url = f"https://github.com/{owner}/{name}/releases/download/{urllib.parse.quote(tag)}/{urllib.parse.quote(manifest_name)}"
+        try:
+            manifest = _public_json(manifest_url)
+            if not isinstance(manifest, dict) or manifest.get("package") != package or manifest.get("version") != version or manifest.get("channel") != channel:
+                continue
+            artifact_meta = manifest.get("artifacts", {}).get(platform_key()) or manifest.get("artifacts", {}).get("any")
+            if not isinstance(artifact_meta, dict):
+                continue
+            filename, digest = artifact_meta.get("file"), artifact_meta.get("sha256")
+            if not isinstance(filename, str) or not isinstance(digest, str) or len(digest) != 64:
+                continue
+            filename = _safe_filename(filename)
+            artifact_url = f"https://github.com/{owner}/{name}/releases/download/{urllib.parse.quote(tag)}/{urllib.parse.quote(filename)}"
+            result.append(RemoteCandidate(InstallCandidate(package, version, channel, Path(filename), digest.lower()), manifest_url, artifact_url))
         except (ReleaseError, AttributeError, TypeError):
             continue
     return result
