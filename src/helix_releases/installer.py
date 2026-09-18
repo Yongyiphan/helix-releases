@@ -31,6 +31,7 @@ class InstallCandidate:
 class RemoteCandidate:
     candidate: InstallCandidate
     manifest_url: str
+    artifact_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,75 @@ def _public_json(url: str):
 
 
 def remote_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
+    try:
+        releases = github_release_candidates(repository, channel)
+    except ReleaseError:
+        releases = []
+    try:
+        legacy = catalog_remote_candidates(repository, channel)
+    except ReleaseError:
+        legacy = []
+    # During migration, retain legacy packages while preferring a GitHub
+    # Release when the same package/version exists in both locations.
+    merged: dict[tuple[str, str], RemoteCandidate] = {
+        (item.candidate.package, item.candidate.version): item for item in legacy
+    }
+    merged.update({
+        (item.candidate.package, item.candidate.version): item for item in releases
+    })
+    return list(merged.values())
+
+
+def github_release_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
+    owner, name = _repository(repository)
+    url = f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/releases?per_page=100"
+    releases = _public_json(url)
+    if not isinstance(releases, list):
+        raise ReleaseError("GitHub releases response is invalid")
+    result: list[RemoteCandidate] = []
+    for release in releases:
+        if not isinstance(release, dict) or release.get("draft") or (release.get("prerelease") and channel == "stable"):
+            continue
+        tag = release.get("tag_name")
+        assets = release.get("assets", [])
+        if not isinstance(tag, str) or not tag or not isinstance(assets, list):
+            continue
+        manifest_asset = next((item for item in assets if isinstance(item, dict) and str(item.get("name", "")).endswith(".manifest.json")), None)
+        if not isinstance(manifest_asset, dict):
+            continue
+        manifest_url = manifest_asset.get("browser_download_url")
+        if not isinstance(manifest_url, str):
+            continue
+        try:
+            manifest = _public_json(manifest_url)
+            if not isinstance(manifest, dict) or manifest.get("channel") != channel:
+                continue
+            package = manifest.get("package")
+            version = manifest.get("version")
+            if not isinstance(package, str) or not isinstance(version, str):
+                continue
+            artifact_meta = manifest.get("artifacts", {}).get(platform_key()) or manifest.get("artifacts", {}).get("any")
+            if not isinstance(artifact_meta, dict):
+                continue
+            filename, digest = artifact_meta.get("file"), artifact_meta.get("sha256")
+            if not isinstance(filename, str) or not isinstance(digest, str) or len(digest) != 64:
+                continue
+            filename = _safe_filename(filename)
+            artifact_asset = next((item for item in assets if isinstance(item, dict) and item.get("name") == filename), None)
+            artifact_url = artifact_asset.get("browser_download_url") if isinstance(artifact_asset, dict) else None
+            if not isinstance(artifact_url, str):
+                continue
+            result.append(RemoteCandidate(
+                InstallCandidate(package, version, channel, Path(filename), digest.lower()),
+                manifest_url,
+                artifact_url,
+            ))
+        except (ReleaseError, AttributeError, TypeError):
+            continue
+    return result
+
+
+def catalog_remote_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
     owner, name = _repository(repository)
     base = f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/contents/releases"
     listing = _public_json(base)
@@ -225,7 +295,7 @@ def fetch_remote_candidate(repository: str, requested: str, channel: str = "stab
     temporary_root = Path(tempfile.mkdtemp(prefix=f"hr-fetch-{package}-"))
     # Derive the sibling raw artifact URL from the validated manifest URL and
     # validated filename; no GitHub credential or gh CLI is consulted.
-    artifact_url = selected.manifest_url.rsplit("/manifest.json", 1)[0] + "/" + urllib.parse.quote(selected.candidate.artifact.name)
+    artifact_url = selected.artifact_url or (selected.manifest_url.rsplit("/manifest.json", 1)[0] + "/" + urllib.parse.quote(selected.candidate.artifact.name))
     destination = temporary_root / selected.candidate.artifact.name
     try:
         with _public_get(artifact_url) as response:

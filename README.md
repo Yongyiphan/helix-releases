@@ -20,14 +20,18 @@ ambiguous wheel output.
 
 ```bash
 hdc release request hdc --version 1.3.2 --channel dev
-hdc release publish hdc --catalog /path/to/helix-releases
+hr packages /path/to/handoff.json
 ```
 
 The catalog layout is independent per package and version:
 
 ```text
-releases/<package>/<version>/manifest.json
-releases/<package>/<version>/<artifact>
+GitHub Release `<package>-v<version>`:
+  <package>-<version>.manifest.json
+  <artifact>
+
+The legacy `releases/<package>/<version>/` layout remains readable during migration but is no
+longer required for new GitHub Release publication.
 ```
 
 This allows HC, HEP, HDC, HR, and HU to release independently while sharing

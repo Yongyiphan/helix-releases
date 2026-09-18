@@ -44,3 +44,26 @@ def test_aliases_are_canonical():
     assert installer.canonical_package("hu") == "helix-updater"
     with pytest.raises(ReleaseError):
         installer.canonical_package("bad/name")
+
+
+def test_github_release_candidates_are_preferred(monkeypatch):
+    digest = hashlib.sha256(b"wheel").hexdigest()
+    manifest = {
+        "package": "hdc",
+        "version": "1.2.0",
+        "channel": "stable",
+        "artifacts": {"linux-x86_64": {"file": "hdc.whl", "sha256": digest}},
+    }
+    responses = {
+        "https://api.github.com/repos/Yongyiphan/helix-releases/releases?per_page=100": [
+            {"tag_name": "hdc-v1.2.0", "draft": False, "prerelease": False, "assets": [
+                {"name": "hdc-1.2.0.manifest.json", "browser_download_url": "https://assets.test/manifest"},
+                {"name": "hdc.whl", "browser_download_url": "https://assets.test/hdc.whl"},
+            ]}
+        ],
+        "https://assets.test/manifest": manifest,
+    }
+    monkeypatch.setattr(installer, "_public_json", lambda url: responses.get(url, []))
+    candidates = installer.remote_candidates("Yongyiphan/helix-releases")
+    assert [(item.candidate.package, item.candidate.version) for item in candidates] == [("hdc", "1.2.0")]
+    assert candidates[0].artifact_url == "https://assets.test/hdc.whl"
