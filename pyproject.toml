@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "helix-releases"
-version = "0.1.6"
+version = "0.1.7"
 description = "Helix release build and publication CLI"
 requires-python = ">=3.11"
 dependencies = []

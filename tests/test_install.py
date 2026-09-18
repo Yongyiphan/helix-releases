@@ -67,3 +67,27 @@ def test_github_release_candidates_are_preferred(monkeypatch):
     candidates = installer.remote_candidates("Yongyiphan/helix-releases")
     assert [(item.candidate.package, item.candidate.version) for item in candidates] == [("hdc", "1.2.0")]
     assert candidates[0].artifact_url == "https://assets.test/hdc.whl"
+
+
+def test_github_release_candidates_fall_back_to_public_atom_feed(monkeypatch):
+    digest = hashlib.sha256(b"wheel").hexdigest()
+    manifest = {
+        "package": "hdc",
+        "version": "1.2.0",
+        "channel": "stable",
+        "artifacts": {"linux-x86_64": {"file": "hdc.whl", "sha256": digest}},
+    }
+    feed = b'''<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+      <entry><link href="https://github.com/Yongyiphan/helix-releases/releases/tag/hdc-v1.2.0" /></entry>
+    </feed>'''
+
+    def public_json(url):
+        if url.endswith("/hdc-1.2.0.manifest.json"):
+            return manifest
+        raise installer.ReleaseError("rate limited")
+
+    monkeypatch.setattr(installer, "_public_json", public_json)
+    monkeypatch.setattr(installer, "_public_bytes", lambda url: feed)
+    candidates = installer.remote_candidates("Yongyiphan/helix-releases")
+    assert [(item.candidate.package, item.candidate.version) for item in candidates] == [("hdc", "1.2.0")]
+    assert candidates[0].artifact_url.endswith("/hdc.whl")
