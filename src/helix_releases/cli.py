@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from importlib.resources import files as package_files
 import json
 import os
 from pathlib import Path
@@ -90,12 +91,14 @@ def _load_handoff(path: Path) -> dict:
 
 def _validate_local_contract(handoff: dict) -> None:
     contract_path = Path(__file__).resolve().parents[2] / "contracts" / f"{handoff['contract_id']}.toml"
-    if not contract_path.is_file():
-        raise ReleaseError(f"HR contract is unavailable: {contract_path}")
     try:
-        local = tomllib.loads(contract_path.read_text(encoding="utf-8")).get("contract")
+        if contract_path.is_file():
+            contract_text = contract_path.read_text(encoding="utf-8")
+        else:
+            contract_text = package_files("helix_releases").joinpath("contracts", f"{handoff['contract_id']}.toml").read_text(encoding="utf-8")
+        local = tomllib.loads(contract_text).get("contract")
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise ReleaseError(f"HR contract is invalid: {contract_path}") from exc
+        raise ReleaseError(f"HR contract is unavailable or invalid: {handoff['contract_id']}") from exc
     if local != handoff["contract"]:
         raise ReleaseError("HDC handoff was generated from a different HR contract")
 

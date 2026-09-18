@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from helix_releases.cli import packages
+from helix_releases.cli import _validate_local_contract
 
 
 def test_packages_validates_handoff_and_publishes_catalog(tmp_path, monkeypatch):
@@ -32,3 +33,10 @@ def test_packages_validates_handoff_and_publishes_catalog(tmp_path, monkeypatch)
     result = packages(handoff, tmp_path / "dist", catalog=tmp_path / "catalog")
     assert result["published"] is True
     assert Path(result["manifest"]).exists()
+
+
+def test_installed_contract_is_packaged(monkeypatch, tmp_path):
+    contract = {"id": "python-wheel-v1", "artifact_format": "python_wheel", "source_layout": "src", "required_paths": ["pyproject.toml", "src"], "supported_platforms": ["linux-x86_64", "windows-x86_64"], "test_commands": [["python", "-m", "pytest", "-q"]], "build_command": ["python", "-m", "pip", "wheel", "--no-build-isolation", "--no-deps", "--wheel-dir", "{output}", "."]}
+    handoff = {"contract_id": "python-wheel-v1", "contract": contract}
+    monkeypatch.setattr("helix_releases.cli.__file__", str(tmp_path / "installed" / "helix_releases" / "cli.py"))
+    _validate_local_contract({**handoff, "contract_hash": "unused"})

@@ -1,0 +1,8 @@
+[contract]
+id = "python-wheel-v1"
+artifact_format = "python_wheel"
+source_layout = "src"
+required_paths = ["pyproject.toml", "src"]
+supported_platforms = ["linux-x86_64", "windows-x86_64"]
+test_commands = [["python", "-m", "pytest", "-q"]]
+build_command = ["python", "-m", "pip", "wheel", "--no-build-isolation", "--no-deps", "--wheel-dir", "{output}", "."]
