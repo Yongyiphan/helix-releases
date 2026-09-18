@@ -1,0 +1,29 @@
+{
+  "artifacts": {
+    "linux-x86_64": {
+      "file": "helix_releases-0.1.6-py3-none-any.whl",
+      "sha256": "ba7ac45436d5c3846bcef4dc3471c7a5d20cef43ac4f7773e2728d84312195ee"
+    },
+    "windows-x86_64": {
+      "file": "helix_releases-0.1.6-py3-none-any.whl",
+      "sha256": "ba7ac45436d5c3846bcef4dc3471c7a5d20cef43ac4f7773e2728d84312195ee"
+    }
+  },
+  "channel": "stable",
+  "commit": "ba7b78ffd384571d2a10ff7b6158968102e288e1",
+  "healthcheck": {
+    "type": "service"
+  },
+  "install": {
+    "component": "helix-releases",
+    "strategy": "python_wheel"
+  },
+  "package": "helix-releases",
+  "published_at": "2026-09-18T05:23:34.098501+00:00",
+  "requirements": {},
+  "rollback": {
+    "supported": true
+  },
+  "schema": 1,
+  "version": "0.1.6"
+}
