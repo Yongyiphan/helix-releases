@@ -273,16 +273,16 @@ def main(argv=None) -> int:
                     _setup_hdc_auth()
                 print(json.dumps(results, indent=2, sort_keys=True))
                 return 0
-            if repository:
+            if args.catalog is not None:
+                candidate = latest_candidate(args.catalog, args.package, args.channel)
+                result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package, args.catalog)
+            else:
                 remote = fetch_remote_candidate(repository, args.package, args.channel)
                 try:
                     candidate = remote.candidate
                     result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package, args.catalog)
                 finally:
                     __import__("shutil").rmtree(remote.temporary_root, ignore_errors=True)
-            else:
-                candidate = latest_candidate(args.catalog, args.package, args.channel)
-                result = _bootstrap_hu(candidate, args.target) if candidate.package == "helix-updater" else _invoke_hu_update(candidate.package, args.catalog)
             if candidate.package == "hdc":
                 _setup_hdc_auth()
             print(json.dumps(result, indent=2, sort_keys=True))

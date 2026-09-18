@@ -32,6 +32,27 @@ def test_install_list_reads_the_platform_release(tmp_path):
     assert installer.latest_candidate(tmp_path, "hdc", "stable").artifact.name == "hdc.whl"
 
 
+def test_single_component_install_with_catalog_uses_local_candidate(monkeypatch, tmp_path):
+    release = tmp_path / "releases" / "hdc" / "1.0.0"
+    release.mkdir(parents=True)
+    artifact = release / "hdc.whl"
+    artifact.write_bytes(b"local-release")
+    manifest = {
+        "package": "hdc",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifacts": {"linux-x86_64": {"file": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}},
+    }
+    (release / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    calls = []
+    monkeypatch.setattr("helix_releases.cli._invoke_hu_update", lambda package, catalog=None: calls.append((package, catalog)) or {"package": package})
+    monkeypatch.setattr("helix_releases.cli._setup_hdc_auth", lambda: None)
+
+    from helix_releases.cli import main
+    assert main(["install", "hdc", "--catalog", str(tmp_path)]) == 0
+    assert calls == [("hdc", tmp_path)]
+
+
 def test_install_requires_elevation(monkeypatch):
     monkeypatch.setattr(installer.platform, "system", lambda: "Linux")
     monkeypatch.setattr(installer.os, "geteuid", lambda: 1000)
