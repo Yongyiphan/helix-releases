@@ -38,3 +38,4 @@ def test_publish_github_release_uploads_artifact_and_manifest_without_catalog_co
     assert result.manifest_file == "demo-1.1.0.manifest.json"
     assert calls[0][0][:4] == ["gh", "release", "create", "demo-v1.1.0"]
     assert "--repo" in calls[0][0]
+    assert calls[0][0][calls[0][0].index("--target") + 1] == "main"
