@@ -9,11 +9,13 @@ import platform
 from typing import Iterator
 
 
-DEFAULT_INSTALL_LOCK = Path("/run/helix/install.lock")
-
-
 def lock_path(path: Path | None = None) -> Path:
-    return Path(path or os.environ.get("HELIX_INSTALL_LOCK_PATH", DEFAULT_INSTALL_LOCK)).expanduser()
+    configured = path or os.environ.get("HELIX_INSTALL_LOCK_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    if platform.system().lower() == "windows":
+        return Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Helix" / "install.lock"
+    return Path("/run/helix/install.lock")
 
 
 @contextmanager
