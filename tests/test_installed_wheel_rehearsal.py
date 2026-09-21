@@ -33,7 +33,7 @@ def test_installed_hr_wheel_rehearses_a_local_build(tmp_path):
     rehearsal_env = {**__import__("os").environ, "PYTHONPATH": sysconfig.get_paths()["purelib"]}
     _run([str(python), "-m", "pip", "install", "--no-index", str(wheel)], env=rehearsal_env)
     hr = runtime / ("Scripts/hr.exe" if sys.platform == "win32" else "bin/hr")
-    assert _run([str(hr), "--version"], env=rehearsal_env).stdout.strip() == "0.1.7"
+    assert _run([str(hr), "--version"], env=rehearsal_env).stdout.strip() == "0.1.0"
 
     source = tmp_path / "component"
     (source / "src" / "demo_component").mkdir(parents=True)
@@ -80,7 +80,7 @@ def test_installed_hr_wheel_rehearses_a_local_build(tmp_path):
         "channel": "stable",
         "artifact_format": "python_wheel",
         "platforms": ["linux-x86_64"],
-        "source_files": ["pyproject.toml", "src"],
+        "source_files": ["pyproject.toml", "src", "tests/test_smoke.py"],
         "required_paths": contract["required_paths"],
         "build_command": contract["build_command"],
         "test_commands": contract["test_commands"],

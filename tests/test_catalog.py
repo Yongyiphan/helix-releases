@@ -2,7 +2,9 @@ from pathlib import Path
 
 from types import SimpleNamespace
 
-from helix_releases.catalog import publish, publish_github_release
+import pytest
+
+from helix_releases.catalog import ReleaseError, publish, publish_github_release, release_tag
 
 
 def test_publish_is_independent_per_package_and_version(tmp_path):
@@ -39,3 +41,13 @@ def test_publish_github_release_uploads_artifact_and_manifest_without_catalog_co
     assert calls[0][0][:4] == ["gh", "release", "create", "demo-v1.1.0"]
     assert "--repo" in calls[0][0]
     assert calls[0][0][calls[0][0].index("--target") + 1] == "main"
+
+
+@pytest.mark.parametrize("version", ["1.2", "1.2.3.dev0", "01.2.3", "1.2.3.4"])
+def test_official_release_tag_requires_major_minor_patch(version):
+    with pytest.raises(ReleaseError, match="MAJOR.MINOR.PATCH"):
+        release_tag("demo", version)
+
+
+def test_release_tag_is_namespaced_by_package_and_version():
+    assert release_tag("helix-updater", "1.2.3") == "helix-updater-v1.2.3"

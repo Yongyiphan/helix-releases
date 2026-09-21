@@ -4,11 +4,12 @@ HR is an on-demand build, publication, and public installation-interface CLI.
 It does not modify source code or run a background service. HDC owns the
 release handoff; HR validates and executes it. HR and HU are distributed
 together; HU is the privileged installation engine and `hr install` is its
-public frontend.
+public frontend. Production packages are discovered only from GitHub Release
+assets; local catalog files are for explicit development rehearsals.
 
 The initial HR installer requires elevation because it bootstraps HU. HR's
 normal build and publication commands run as the operator. `hr install` reads
-the public catalog and delegates verification, versioned activation, service
+public GitHub Releases and delegates verification, versioned activation, service
 lifecycle, and rollback to elevated HU.
 
 Keep builds reproducible, execute only structured command arguments, and use

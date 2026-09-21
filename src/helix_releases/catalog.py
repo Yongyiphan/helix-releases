@@ -50,6 +50,12 @@ def _safe_name(value: str) -> str:
 def release_tag(package: str, version: str) -> str:
     package_name = _safe_name(package)
     version_name = _safe_name(version)
+    parts = version_name.split(".")
+    if len(parts) != 3 or any(
+        not part.isdigit() or (part != "0" and part.startswith("0"))
+        for part in parts
+    ):
+        raise ReleaseError("published versions must use MAJOR.MINOR.PATCH (for example 1.2.3)")
     return f"{package_name}-v{version_name}"
 
 
@@ -93,10 +99,10 @@ def publish(
     artifact: Path,
     updater_requirement: str | None = None,
 ) -> PublishedArtifact:
-    """Publish one independent package release into a public-catalog layout.
+    """Write one independent package release into an explicit local catalog.
 
-    The layout is intentionally compatible with a later GitHub-release adapter:
-    each package/version has one manifest and one or more immutable artifacts.
+    This path is for isolated development runtime rehearsals. Production
+    publication uses :func:`publish_github_release` and GitHub Release assets.
     """
     if not artifact.is_file():
         raise ReleaseError(f"artifact does not exist: {artifact}")

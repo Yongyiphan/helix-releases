@@ -1,8 +1,7 @@
 import json
 from pathlib import Path
 
-from helix_releases.cli import packages
-from helix_releases.cli import _validate_local_contract
+from helix_releases.cli import packages, _load_handoff, _validate_local_contract
 
 
 def test_packages_validates_handoff_and_publishes_catalog(tmp_path, monkeypatch):
@@ -28,11 +27,36 @@ def test_packages_validates_handoff_and_publishes_catalog(tmp_path, monkeypatch)
     handoff = tmp_path / "handoff.json"
     handoff.write_text(json.dumps({
         "protocol": 1, "handoff_id": "release-test", "contract_id": "python-wheel-v1", "contract_hash": hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest(), "contract": contract,
-        "component": "demo-package", "repository": "demo-package", "branch": "main", "source_root": str(source), "source_commit": commit, "version": "1.0.0", "channel": "dev", "artifact_format": "python_wheel", "platforms": ["linux-x86_64"], "source_files": ["pyproject.toml", "src/demo.py"], "required_paths": ["pyproject.toml", "src"], "build_command": ["python", "-m", "pip", "wheel", "--no-build-isolation", "--no-deps", "--wheel-dir", "{output}", "."], "test_commands": [["python", "-m", "pytest", "-q"]], "owner_controller": "test", "verification": {"hermes": "passed"}
+        "component": "demo-package", "repository": "demo-package", "branch": "main", "source_root": str(source), "source_commit": commit, "version": "1.0.0", "channel": "dev", "artifact_format": "python_wheel", "platforms": ["linux-x86_64"], "source_files": ["pyproject.toml", "src/demo.py", "tests/test_smoke.py"], "required_paths": ["pyproject.toml", "src"], "build_command": ["python", "-m", "pip", "wheel", "--no-build-isolation", "--no-deps", "--wheel-dir", "{output}", "."], "test_commands": [["python", "-m", "pytest", "-q"]], "owner_controller": "test"
     }), encoding="utf-8")
+    assert _load_handoff(handoff)["component"] == "demo-package"
+    legacy_hdc_handoff = json.loads(handoff.read_text(encoding="utf-8"))
+    legacy_hdc_handoff["verification"] = {"hermes": "passed"}
+    handoff.write_text(json.dumps(legacy_hdc_handoff), encoding="utf-8")
+    assert _load_handoff(handoff)["verification"]["hermes"] == "passed"
     result = packages(handoff, tmp_path / "dist", catalog=tmp_path / "catalog")
     assert result["published"] is True
     assert Path(result["manifest"]).exists()
+
+
+def test_handoff_rejects_commands_that_differ_from_hr_contract(tmp_path):
+    import hashlib
+    import pytest
+    from helix_releases.catalog import ReleaseError
+
+    contract = {"id": "python-wheel-v1", "required_paths": ["pyproject.toml", "src"],
+                "test_commands": [["python", "-m", "pytest", "-q"]],
+                "build_command": ["python", "-m", "pip", "wheel", "--no-build-isolation", "--no-deps", "--wheel-dir", "{output}", "."]}
+    value = {"protocol": 1, "handoff_id": "manual", "contract_id": contract["id"],
+             "contract_hash": hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest(),
+             "contract": contract, "component": "demo", "source_root": str(tmp_path),
+             "source_commit": "commit", "version": "1.0.0", "build_command": ["python", "-c", "pass"],
+             "test_commands": contract["test_commands"], "source_files": ["pyproject.toml"],
+             "required_paths": contract["required_paths"]}
+    handoff = tmp_path / "handoff.json"
+    handoff.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ReleaseError, match="build command differs"):
+        _load_handoff(handoff)
 
 
 def test_installed_contract_is_packaged(monkeypatch, tmp_path):

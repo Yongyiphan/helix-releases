@@ -33,7 +33,12 @@ def test_hdc_cli_query_to_hr_build_and_catalog(tmp_path):
     (source / "src").mkdir()
     (source / "src" / "demo_component.py").write_text("VALUE = 1\n", encoding="utf-8")
     (source / "tests").mkdir()
-    (source / "tests" / "test_smoke.py").write_text("def test_smoke():\n    assert True\n", encoding="utf-8")
+    (source / "tests" / "test_smoke.py").write_text(
+        "from pathlib import Path\n\ndef test_smoke():\n    assert not Path('ignored-local.txt').exists()\n",
+        encoding="utf-8",
+    )
+    (source / ".gitignore").write_text("ignored-local.txt\n", encoding="utf-8")
+    (source / "ignored-local.txt").write_text("must not enter release workspace\n", encoding="utf-8")
     subprocess.run(("git", "init", "-q", str(source)), check=True)
     subprocess.run(("git", "-C", str(source), "config", "user.email", "test@example.invalid"), check=True)
     subprocess.run(("git", "-C", str(source), "config", "user.name", "Test"), check=True)
@@ -55,10 +60,10 @@ def test_hdc_cli_query_to_hr_build_and_catalog(tmp_path):
     request = json.loads(request_result.output)
     publish_result = runner.invoke(hdc_app, [
         "--config", str(config), "release", "publish", "component",
-        "--catalog", str(tmp_path / "catalog"), "--output", str(tmp_path / "dist"),
-        "--hr-command", str(Path(sys.executable).parent / "hr"),
-        "--hermes-validated",
-    ])
+            "--catalog", str(tmp_path / "catalog"), "--output", str(tmp_path / "dist"),
+            "--hr-command", str(Path(sys.executable).parent / "hr"),
+            "--hermes-validated",
+        ])
     assert publish_result.exit_code == 0, publish_result.output
     manifests = list((tmp_path / "catalog").glob("releases/component/1.0.0/manifest.json"))
     assert len(manifests) == 1
