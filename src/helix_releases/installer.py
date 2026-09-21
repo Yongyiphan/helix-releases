@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ElementTree
 import venv
 
 from .catalog import ReleaseError
+from .install_lock import installation_lock
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class InstallCandidate:
     channel: str
     artifact: Path
     sha256: str
+    manifest: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,8 @@ def privileged_command(command: list[str]) -> list[str]:
     """Return the host elevation wrapper used to invoke HU."""
     if platform.system().lower() == "windows":
         raise ReleaseError("Windows HU invocation requires the elevated launcher integration")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return command
     return ["sudo", *command]
 
 
@@ -132,7 +136,7 @@ def latest_candidate(catalog: Path, requested: str, channel: str) -> InstallCand
             filename = _safe_filename(filename)
             artifact = manifest_path.parent / filename
             if artifact.is_file() and len(digest) == 64:
-                candidates.append(InstallCandidate(package, str(value["version"]), channel, artifact, digest.lower()))
+                candidates.append(InstallCandidate(package, str(value["version"]), channel, artifact, digest.lower(), value))
         except (OSError, ValueError, KeyError, TypeError):
             continue
     if not candidates:
@@ -184,23 +188,13 @@ def _public_bytes(url: str) -> bytes:
 
 
 def remote_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
-    try:
-        releases = github_release_candidates(repository, channel)
-    except ReleaseError:
-        releases = []
-    try:
-        legacy = catalog_remote_candidates(repository, channel)
-    except ReleaseError:
-        legacy = []
-    # During migration, retain legacy packages while preferring a GitHub
-    # Release when the same package/version exists in both locations.
-    merged: dict[tuple[str, str], RemoteCandidate] = {
-        (item.candidate.package, item.candidate.version): item for item in legacy
-    }
-    merged.update({
-        (item.candidate.package, item.candidate.version): item for item in releases
-    })
-    return list(merged.values())
+    """Discover installable packages from GitHub Releases only.
+
+    Source-tree catalog files remain available through the explicit local
+    ``--catalog`` development path; they are not a production distribution
+    channel.
+    """
+    return github_release_candidates(repository, channel)
 
 
 def github_release_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
@@ -234,6 +228,8 @@ def github_release_candidates(repository: str, channel: str = "stable") -> list[
             version = manifest.get("version")
             if not isinstance(package, str) or not isinstance(version, str):
                 continue
+            if tag != f"{package}-v{version}" or not _is_semver(version):
+                continue
             artifact_meta = manifest.get("artifacts", {}).get(platform_key()) or manifest.get("artifacts", {}).get("any")
             if not isinstance(artifact_meta, dict):
                 continue
@@ -246,7 +242,7 @@ def github_release_candidates(repository: str, channel: str = "stable") -> list[
             if not isinstance(artifact_url, str):
                 continue
             result.append(RemoteCandidate(
-                InstallCandidate(package, version, channel, Path(filename), digest.lower()),
+                InstallCandidate(package, version, channel, Path(filename), digest.lower(), manifest),
                 manifest_url,
                 artifact_url,
             ))
@@ -279,7 +275,9 @@ def github_atom_release_candidates(repository: str, channel: str = "stable") -> 
         manifest_url = f"https://github.com/{owner}/{name}/releases/download/{urllib.parse.quote(tag)}/{urllib.parse.quote(manifest_name)}"
         try:
             manifest = _public_json(manifest_url)
-            if not isinstance(manifest, dict) or manifest.get("package") != package or manifest.get("version") != version or manifest.get("channel") != channel:
+            if (not isinstance(manifest, dict) or manifest.get("package") != package
+                    or manifest.get("version") != version or manifest.get("channel") != channel
+                    or not _is_semver(version)):
                 continue
             artifact_meta = manifest.get("artifacts", {}).get(platform_key()) or manifest.get("artifacts", {}).get("any")
             if not isinstance(artifact_meta, dict):
@@ -289,52 +287,9 @@ def github_atom_release_candidates(repository: str, channel: str = "stable") -> 
                 continue
             filename = _safe_filename(filename)
             artifact_url = f"https://github.com/{owner}/{name}/releases/download/{urllib.parse.quote(tag)}/{urllib.parse.quote(filename)}"
-            result.append(RemoteCandidate(InstallCandidate(package, version, channel, Path(filename), digest.lower()), manifest_url, artifact_url))
+            result.append(RemoteCandidate(InstallCandidate(package, version, channel, Path(filename), digest.lower(), manifest), manifest_url, artifact_url))
         except (ReleaseError, AttributeError, TypeError):
             continue
-    return result
-
-
-def catalog_remote_candidates(repository: str, channel: str = "stable") -> list[RemoteCandidate]:
-    owner, name = _repository(repository)
-    base = f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/contents/releases"
-    listing = _public_json(base)
-    if not isinstance(listing, list):
-        raise ReleaseError("public HR catalog releases directory is invalid")
-    result: list[RemoteCandidate] = []
-    for package_item in listing:
-        if not isinstance(package_item, dict) or package_item.get("type") != "dir":
-            continue
-        package = package_item.get("name")
-        if not isinstance(package, str):
-            continue
-        versions = _public_json(f"{base}/{urllib.parse.quote(package)}/")
-        if not isinstance(versions, list):
-            continue
-        for version_item in versions:
-            if not isinstance(version_item, dict) or version_item.get("type") != "dir":
-                continue
-            version = version_item.get("name")
-            if not isinstance(version, str):
-                continue
-            manifest_url = f"https://raw.githubusercontent.com/{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/main/releases/{urllib.parse.quote(package)}/{urllib.parse.quote(version)}/manifest.json"
-            try:
-                manifest = _public_json(manifest_url)
-                if manifest.get("package") != package or manifest.get("channel") != channel:
-                    continue
-                artifact_meta = manifest.get("artifacts", {}).get(platform_key()) or manifest.get("artifacts", {}).get("any")
-                if not isinstance(artifact_meta, dict):
-                    continue
-                filename, digest = artifact_meta.get("file"), artifact_meta.get("sha256")
-                if not isinstance(filename, str) or not isinstance(digest, str):
-                    continue
-                filename = _safe_filename(filename)
-                result.append(RemoteCandidate(
-                    InstallCandidate(package, version, channel, Path(filename), digest.lower()),
-                    manifest_url,
-                ))
-            except (ReleaseError, AttributeError):
-                continue
     return result
 
 
@@ -355,7 +310,7 @@ def fetch_remote_candidate(repository: str, requested: str, channel: str = "stab
     except Exception:
         shutil.rmtree(temporary_root, ignore_errors=True)
         raise ReleaseError(f"could not download public release artifact: {artifact_url}")
-    return FetchedCandidate(InstallCandidate(package, selected.candidate.version, channel, destination, selected.candidate.sha256), temporary_root)
+    return FetchedCandidate(InstallCandidate(package, selected.candidate.version, channel, destination, selected.candidate.sha256, selected.candidate.manifest), temporary_root)
 
 
 def _version_key(value: str) -> tuple:
@@ -364,6 +319,15 @@ def _version_key(value: str) -> tuple:
         digits = "".join(char for char in part if char.isdigit())
         result.append((0, int(digits)) if digits else (1, part))
     return tuple(result)
+
+
+def _is_semver(value: str) -> bool:
+    """Stable Helix releases use three numeric SemVer components."""
+    parts = value.split(".")
+    return len(parts) == 3 and all(
+        part.isdigit() and (part == "0" or not part.startswith("0"))
+        for part in parts
+    )
 
 
 def _entrypoint(package: str) -> str:
@@ -377,7 +341,7 @@ def default_root(package: str) -> Path:
         name = package
     if platform.system().lower() == "windows":
         return Path(os.environ.get("PROGRAMFILES", r"C:\\Program Files")) / "Helix" / name
-    return Path("/opt/helix") / name
+    return Path("/opt/helix/production") / name
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -403,51 +367,52 @@ def _restart_service(service: str | None) -> None:
 
 
 def install_candidate(candidate: InstallCandidate, target: Path, service: str | None = None, *, restart: bool = True, launcher_dir: Path | None = None) -> dict:
-    actual = _sha256(candidate.artifact)
-    if actual != candidate.sha256:
-        raise ReleaseError(f"artifact checksum mismatch for {candidate.artifact.name}")
-    target = target.expanduser().resolve()
-    release = target / "releases" / candidate.version
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "releases").mkdir(parents=True, exist_ok=True)
-    if release.exists():
-        existing = release / ".artifact.sha256"
-        if existing.is_file() and existing.read_text(encoding="utf-8").strip() == actual:
-            return {"package": candidate.package, "version": candidate.version, "state": "already_installed", "path": str(release)}
-        raise ReleaseError(f"release already exists with different contents: {release}")
-    temporary = Path(tempfile.mkdtemp(prefix=f"{candidate.package}-", dir=target))
-    staged = temporary / candidate.version
-    try:
-        staged.mkdir()
-        environment = staged / ".venv"
-        venv.EnvBuilder(with_pip=True, clear=True).create(environment)
-        pip = environment / ("Scripts" if platform.system().lower() == "windows" else "bin") / ("pip.exe" if platform.system().lower() == "windows" else "pip")
-        _run([str(pip), "install", "--no-cache-dir", "--force-reinstall", str(candidate.artifact)])
-        (staged / ".artifact.sha256").write_text(actual + "\n", encoding="utf-8")
-        staged.rename(release)
-        if platform.system().lower() != "windows":
-            _relocate_python_scripts(release / ".venv", staged / ".venv")
-        current = target / "current"
-        if platform.system().lower() == "windows":
-            state = target / "installation.json"
-            state.write_text(json.dumps({"schema": 1, "active": str(release), "package": candidate.package}, indent=2) + "\n", encoding="utf-8")
-        else:
-            link = target / ".current.new"
-            link.symlink_to(release, target_is_directory=True)
-            link.replace(current)
-            launcher_root = launcher_dir or Path("/usr/local/bin")
-            launcher_root.mkdir(parents=True, exist_ok=True)
-            launcher = launcher_root / _entrypoint(candidate.package)
-            launcher.write_text(f"#!/bin/sh\nexec {current}/.venv/bin/{_entrypoint(candidate.package)} \"$@\"\n", encoding="utf-8")
-            launcher.chmod(0o755)
-        if restart:
-            _restart_service(service)
-        return {"package": candidate.package, "version": candidate.version, "state": "installed", "path": str(release), "sha256": actual}
-    except Exception:
-        shutil.rmtree(staged, ignore_errors=True)
-        raise
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
+    with installation_lock():
+        actual = _sha256(candidate.artifact)
+        if actual != candidate.sha256:
+            raise ReleaseError(f"artifact checksum mismatch for {candidate.artifact.name}")
+        target = target.expanduser().resolve()
+        release = target / "releases" / candidate.version
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "releases").mkdir(parents=True, exist_ok=True)
+        if release.exists():
+            existing = release / ".artifact.sha256"
+            if existing.is_file() and existing.read_text(encoding="utf-8").strip() == actual:
+                return {"package": candidate.package, "version": candidate.version, "state": "already_installed", "path": str(release)}
+            raise ReleaseError(f"release already exists with different contents: {release}")
+        temporary = Path(tempfile.mkdtemp(prefix=f"{candidate.package}-", dir=target))
+        staged = temporary / candidate.version
+        try:
+            staged.mkdir()
+            environment = staged / ".venv"
+            venv.EnvBuilder(with_pip=True, clear=True).create(environment)
+            pip = environment / ("Scripts" if platform.system().lower() == "windows" else "bin") / ("pip.exe" if platform.system().lower() == "windows" else "pip")
+            _run([str(pip), "install", "--no-cache-dir", "--force-reinstall", str(candidate.artifact)])
+            (staged / ".artifact.sha256").write_text(actual + "\n", encoding="utf-8")
+            staged.rename(release)
+            if platform.system().lower() != "windows":
+                _relocate_python_scripts(release / ".venv", staged / ".venv")
+            current = target / "current"
+            if platform.system().lower() == "windows":
+                state = target / "installation.json"
+                state.write_text(json.dumps({"schema": 1, "active": str(release), "package": candidate.package}, indent=2) + "\n", encoding="utf-8")
+            else:
+                link = target / ".current.new"
+                link.symlink_to(release, target_is_directory=True)
+                link.replace(current)
+                launcher_root = launcher_dir or Path("/usr/local/bin")
+                launcher_root.mkdir(parents=True, exist_ok=True)
+                launcher = launcher_root / _entrypoint(candidate.package)
+                launcher.write_text(f"#!/bin/sh\nexec {current}/.venv/bin/{_entrypoint(candidate.package)} \"$@\"\n", encoding="utf-8")
+                launcher.chmod(0o755)
+            if restart:
+                _restart_service(service)
+            return {"package": candidate.package, "version": candidate.version, "state": "installed", "path": str(release), "sha256": actual}
+        except Exception:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
 
 
 def _relocate_python_scripts(runtime: Path, old_runtime: Path) -> None:
