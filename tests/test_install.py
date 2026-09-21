@@ -104,6 +104,53 @@ def test_installed_hu_updates_through_selected_runtime_instead_of_rebootstrappin
     assert calls == [("helix-updater", "development", Path("hu.whl"), {"version": "1.2.0"})]
 
 
+def test_hu_update_uses_the_selected_profile_launcher(monkeypatch, tmp_path):
+    import helix_releases.cli as cli
+
+    config = tmp_path / "helix-updater.toml"
+    artifact = tmp_path / "hu.whl"
+    artifact.write_bytes(b"wheel")
+    production = tmp_path / "production-hu"
+    development = tmp_path / "development-hu"
+    calls = []
+    monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(cli, "HU_CONFIG_PATH", config)
+    monkeypatch.setattr(cli, "HU_PROFILE_LAUNCHERS", {
+        "production": production, "development": development,
+    })
+    monkeypatch.setattr(cli, "privileged_command", lambda command: command)
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, **kwargs:
+                        calls.append((command, kwargs)) or type("Result", (), {"returncode": 0})())
+
+    result = cli._invoke_hu_update("helix-updater", Path("catalog"), "development",
+                                   artifact, {"version": "0.1.0"})
+
+    assert result["state"] == "artifact_handed_to_hu"
+    assert calls[0][0][0] == str(development)
+    assert calls[0][0][calls[0][0].index("--profile") + 1] == "development"
+
+
+def test_hu_profile_readiness_uses_profile_launcher_and_matching_service(monkeypatch, tmp_path):
+    import helix_releases.cli as cli
+
+    config = tmp_path / "helix-updater.toml"
+    config.touch()
+    production, development = tmp_path / "production-hu", tmp_path / "development-hu"
+    production.touch()
+    development.touch()
+    calls = []
+    monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(cli, "HU_CONFIG_PATH", config)
+    monkeypatch.setattr(cli, "HU_PROFILE_LAUNCHERS", {
+        "production": production, "development": development,
+    })
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, **kwargs:
+                        calls.append(command) or type("Result", (), {"returncode": 0})())
+
+    assert cli._hu_profile_ready("development") is True
+    assert calls == [("systemctl", "is-active", "--quiet", "helix-updater-dev.service")]
+
+
 def test_missing_development_hu_bootstraps_only_the_selected_profile(monkeypatch):
     from types import SimpleNamespace
     import helix_releases.cli as cli

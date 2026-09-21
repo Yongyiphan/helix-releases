@@ -29,6 +29,10 @@ DISPLAY_ALIASES = {
 }
 HU_CONFIG_PATH = Path("/etc/helix/helix-updater.toml")
 LEGACY_HU_CONFIG_PATH = Path("/etc/helix/updater/helix-updater.toml")
+HU_PROFILE_LAUNCHERS = {
+    "production": Path("/usr/local/bin/helix-updater"),
+    "development": Path("/usr/local/libexec/helix-development/helix-updater"),
+}
 
 
 def _development_catalog_path() -> Path:
@@ -68,7 +72,10 @@ def _invoke_hu_update(package: str, catalog: Path | None = None, profile: str = 
     if platform.system().lower() != "linux":
         raise ReleaseError("HR/HU bundle installation is currently Linux-only; Windows support is deferred")
     config = HU_CONFIG_PATH
-    command = ["helix-updater", "--config", str(config), "--profile", profile]
+    launcher = HU_PROFILE_LAUNCHERS.get(profile)
+    if launcher is None:
+        raise ReleaseError(f"unsupported HU profile: {profile}")
+    command = [str(launcher), "--config", str(config), "--profile", profile]
     if catalog is not None:
         command.extend(["--catalog", str(catalog)])
     if artifact is None or manifest is None:
@@ -480,25 +487,10 @@ def _hu_profile_ready(profile: str) -> bool:
     """Return true only when the selected Linux HU runtime and service are already active."""
     if platform.system().lower() != "linux":
         return False
-    config = HU_CONFIG_PATH
-    if not config.is_file():
+    launcher = HU_PROFILE_LAUNCHERS.get(profile)
+    if launcher is None or not HU_CONFIG_PATH.is_file() or not launcher.is_file():
         return False
-    try:
-        raw = tomllib.loads(config.read_text(encoding="utf-8"))
-        profile_raw = raw["profiles"][profile]
-        subscription = profile_raw["packages"]["helix-updater"]
-        target = subscription["target"]
-        root = Path(target["root"]).expanduser()
-        boundary = profile_raw.get("helix_root")
-        if not root.is_absolute() and boundary:
-            root = Path(boundary).expanduser() / root
-        executable = root / "current" / ".venv" / "bin" / "helix-updater"
-        service = target.get("service")
-        expected = "helix-updater.service" if profile == "production" else "helix-updater-dev.service"
-        if service != expected or not executable.is_file():
-            return False
-    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError):
-        return False
+    service = "helix-updater.service" if profile == "production" else "helix-updater-dev.service"
     check = subprocess.run(("systemctl", "is-active", "--quiet", service), check=False,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return check.returncode == 0
