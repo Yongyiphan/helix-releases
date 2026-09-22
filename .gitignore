@@ -1,5 +1,8 @@
 .venv/
 .pytest_cache/
+
+# Local analysis output; never release inputs.
+graphify-out/
 build/
 dist/
 src/*.egg-info/
