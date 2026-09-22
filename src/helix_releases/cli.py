@@ -121,7 +121,7 @@ def _seed_hu_profiles(config: Path, version: str, production_root: Path, develop
         temporary.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         temporary.replace(state_path)
         if profile == "production":
-            hr_root = Path("/opt/helix/production/helix-releases")
+            hr_root = default_root("helix-releases")
             hr_release = hr_root / "releases" / __version__
             if hr_release.is_dir():
                 hr_state = Path(profile_raw.get("state_root", "state")).expanduser() / "packages" / "helix-releases.json"
@@ -352,7 +352,7 @@ def main(argv=None) -> int:
                 result = _bootstrap_development_profile(candidate, config, legacy_config=legacy_config)
                 print(json.dumps(result, sort_keys=True))
                 return 0
-            root_prod = args.target or _configured_hu_root(config) or Path("/opt/helix/production/updater")
+            root_prod = args.target or _configured_hu_root(config) or default_root("helix-updater")
             result = install_candidate(candidate, root_prod, restart=False)
             config.parent.mkdir(parents=True, exist_ok=True)
             hu = root_prod / "current" / ".venv" / "bin" / "helix-updater"
@@ -446,7 +446,7 @@ def _bootstrap_development_profile(candidate, config: Path, legacy_config: Path 
         profiles_init.extend(("--legacy-config", str(legacy_config), "--preserve-legacy-config"))
     profiles_init.extend(("runtime", "profiles-init", "--catalog", str(_development_catalog_path())))
     subprocess.run(tuple(profiles_init), check=True)
-    _seed_hu_profiles(config, candidate.version, Path("/opt/helix/production/updater"),
+    _seed_hu_profiles(config, candidate.version, default_root("helix-updater"),
                       dev_root, profiles=("development",))
     subprocess.run((str(dev_hu), "--config", str(config), "--profile", "development",
                     "runtime", "install-services"), check=True)

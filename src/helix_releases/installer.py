@@ -341,7 +341,7 @@ def default_root(package: str) -> Path:
         name = package
     if platform.system().lower() == "windows":
         return Path(os.environ.get("PROGRAMFILES", r"C:\\Program Files")) / "Helix" / name
-    return Path("/opt/helix/production") / name
+    return Path("/opt/helix") / name
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

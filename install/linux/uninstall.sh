@@ -7,8 +7,7 @@ for service in hdc-controller.service helix-updater.service helix-updater-dev.se
 rm -f /etc/systemd/system/hdc-controller.service /etc/systemd/system/helix-updater.service /etc/systemd/system/helix-updater-dev.service
 systemctl daemon-reload 2>/dev/null || true
 rm -f /usr/local/bin/hr /usr/local/bin/hdc /usr/local/bin/helix-updater
-rm -rf /opt/helix/production/helix-releases /opt/helix/production/hdc /opt/helix/production/updater \
-    /opt/helix/development/updater /usr/local/libexec/helix-development \
+rm -rf /opt/helix/development/updater /usr/local/libexec/helix-development \
     /opt/helix/helix-releases /opt/helix/hdc /opt/helix/updater \
     /var/cache/helix/production/updater /var/cache/helix/development/updater \
     /var/cache/helix/updater /var/log/helix/production /var/log/helix/development \

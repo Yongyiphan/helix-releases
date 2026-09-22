@@ -69,6 +69,13 @@ def test_aliases_are_canonical():
         installer.canonical_package("bad/name")
 
 
+def test_default_linux_roots_use_the_shared_production_namespace(monkeypatch):
+    monkeypatch.setattr(installer.platform, "system", lambda: "Linux")
+    assert installer.default_root("helix-releases") == Path("/opt/helix/helix-releases")
+    assert installer.default_root("helix-updater") == Path("/opt/helix/updater")
+    assert installer.default_root("hdc") == Path("/opt/helix/hdc")
+
+
 def test_privileged_command_does_not_nest_sudo_for_root(monkeypatch):
     monkeypatch.setattr(installer.platform, "system", lambda: "Linux")
     monkeypatch.setattr(installer.os, "geteuid", lambda: 0)

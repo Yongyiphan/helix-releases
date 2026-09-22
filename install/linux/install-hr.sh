@@ -3,7 +3,7 @@ set -euo pipefail
 if [ "${1-}" = "" ]; then exec "$(dirname "$0")/install.sh"; fi
 if [ "$(id -u)" -ne 0 ]; then echo "Run with sudo." >&2; exit 1; fi
 wheel=$(readlink -f "$1")
-root=/opt/helix/production/helix-releases
+root=/opt/helix/helix-releases
 mkdir -p "$root/releases"
 version=$(python3 -c 'import sys,zipfile; from email.parser import BytesParser; z=zipfile.ZipFile(sys.argv[1]); n=next(x for x in z.namelist() if x.endswith(".dist-info/METADATA")); print(BytesParser().parsebytes(z.read(n))["Version"])' "$wheel")
 release="$root/releases/$version"
