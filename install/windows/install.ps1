@@ -18,7 +18,12 @@ function Assert-Administrator {
 }
 
 function Invoke-GitHubJson([string]$Uri) {
-    Invoke-RestMethod -Headers @{ Accept = 'application/vnd.github+json' } -Uri $Uri
+    $response = Invoke-RestMethod -Headers @{ Accept = 'application/vnd.github+json' } -Uri $Uri
+    if ($response -is [Array]) {
+        foreach ($item in $response) { Write-Output $item }
+    } else {
+        $response
+    }
 }
 
 function Assert-SafeAssetName([string]$Name) {
