@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -10,6 +11,8 @@ import pytest
 @pytest.mark.skipif(shutil.which("powershell") is None, reason="Windows PowerShell is required")
 def test_windows_installer_runtime_functions_execute(tmp_path):
     installer = Path(__file__).parents[1] / "install" / "windows" / "install.ps1"
+    source_text = installer.read_text(encoding="utf-8")
+    assert re.search(r"& \$python -m pip install .*\*> \$null", source_text)
     harness = textwrap.dedent(
         r"""
         $ErrorActionPreference = 'Stop'

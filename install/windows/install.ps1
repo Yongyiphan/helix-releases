@@ -114,7 +114,7 @@ function Install-HrRuntime([string]$Wheel, $Release, [string]$HelixRoot) {
         if ($LASTEXITCODE -ne 0) { throw 'Python 3 and the venv module are required.' }
     }
     $python = Join-Path $venv 'Scripts\python.exe'
-    & $python -m pip install --disable-pip-version-check --no-index --no-deps --force-reinstall $Wheel
+    & $python -m pip install --disable-pip-version-check --no-index --no-deps --force-reinstall $Wheel *> $null
     if ($LASTEXITCODE -ne 0) { throw 'Installing the HR wheel failed.' }
 
     Set-Content -LiteralPath (Join-Path $releaseRoot 'release.json') -Encoding utf8 -Value (@{
