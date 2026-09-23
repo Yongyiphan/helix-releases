@@ -29,8 +29,10 @@ function Assert-SafeAssetName([string]$Name) {
 
 function Get-VerifiedRelease([string]$ReleaseRepository, [string]$Package, [switch]$SkipSourceVerification) {
     $api = "https://api.github.com/repos/$Owner/$ReleaseRepository"
-    $releases = @(Invoke-GitHubJson "$api/releases?per_page=100") |
-        Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -like "$Package-v*" }
+    $releases = @(Invoke-GitHubJson "$api/releases?per_page=100")
+    $releases = @($releases | Where-Object {
+        -not $_.draft -and -not $_.prerelease -and $_.tag_name -like "$Package-v*"
+    })
 
     $release = $releases |
         Sort-Object { [version]($_.tag_name -replace "^$Package-v", '') } -Descending |
