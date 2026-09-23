@@ -15,6 +15,8 @@ def test_windows_installer_runtime_functions_execute(tmp_path):
     assert re.search(r"& \$python -m pip install .*\*> \$null", source_text)
     assert "Stop-ExistingUpdaterService" in source_text
     assert "Stop-Service -Name 'HelixUpdater' -Force" in source_text
+    assert "active = $releaseRoot" in source_text
+    assert "releases = @($releaseRoot)" in source_text
     harness = textwrap.dedent(
         r"""
         $ErrorActionPreference = 'Stop'
