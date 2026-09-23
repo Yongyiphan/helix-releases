@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -21,6 +22,7 @@ def _release(root: Path, package: str = "hdc") -> None:
         "published_at": "2026-09-16T00:00:00Z",
         "artifacts": {
             "linux-x86_64": {"file": artifact.name, "sha256": hashlib.sha256(b"wheel").hexdigest()},
+            "windows-x86_64": {"file": artifact.name, "sha256": hashlib.sha256(b"wheel").hexdigest()},
         },
     }), encoding="utf-8")
 
@@ -41,7 +43,10 @@ def test_single_component_install_with_catalog_uses_local_candidate(monkeypatch,
         "package": "hdc",
         "version": "1.0.0",
         "channel": "stable",
-        "artifacts": {"linux-x86_64": {"file": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}},
+        "artifacts": {
+            "linux-x86_64": {"file": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()},
+            "windows-x86_64": {"file": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()},
+        },
     }
     (release / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     calls = []
@@ -57,7 +62,7 @@ def test_single_component_install_with_catalog_uses_local_candidate(monkeypatch,
 
 def test_install_requires_elevation(monkeypatch):
     monkeypatch.setattr(installer.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(installer.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(installer.os, "geteuid", lambda: 1000, raising=False)
     with pytest.raises(ReleaseError, match="sudo or as root"):
         installer.require_elevation()
 
@@ -78,11 +83,13 @@ def test_default_linux_roots_use_the_shared_production_namespace(monkeypatch):
 
 def test_privileged_command_does_not_nest_sudo_for_root(monkeypatch):
     monkeypatch.setattr(installer.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(installer.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(installer.os, "geteuid", lambda: 0, raising=False)
     assert installer.privileged_command(["helix-updater", "status"]) == ["helix-updater", "status"]
 
 
 def test_hu_bootstrap_reuses_configured_production_runtime_root(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("POSIX absolute-path resolution assertion")
     from helix_releases.cli import _configured_hu_root
 
     config = tmp_path / "helix-updater.toml"
@@ -242,7 +249,8 @@ def test_active_production_routes_development_bootstrap_to_dev_only(monkeypatch,
         "--sha256", "a" * 64, "--profile", "development",
     ]) == 0
 
-    assert calls == [("helix-updater", "1.2.0", Path("/etc/helix/helix-updater.toml"))]
+    expected_config = Path("C:/ProgramData/Helix/helix-updater.toml") if sys.platform == "win32" else Path("/etc/helix/helix-updater.toml")
+    assert calls == [("helix-updater", "1.2.0", expected_config)]
     assert json.loads(capsys.readouterr().out)["production_touched"] is False
 
 
@@ -264,7 +272,8 @@ def test_development_bootstrap_is_dev_only_even_without_production(monkeypatch, 
         "--sha256", "a" * 64, "--profile", "development",
     ]) == 0
 
-    assert calls == [("helix-updater", Path("/etc/helix/helix-updater.toml"), tmp_path / "missing-legacy.toml")]
+    expected_config = Path("C:/ProgramData/Helix/helix-updater.toml") if sys.platform == "win32" else Path("/etc/helix/helix-updater.toml")
+    assert calls == [("helix-updater", expected_config, tmp_path / "missing-legacy.toml")]
     assert json.loads(capsys.readouterr().out)["production_touched"] is False
 
 
@@ -338,9 +347,11 @@ def test_seeding_development_profile_preserves_production_state(tmp_path):
     production_state.parent.mkdir(parents=True)
     production_state.write_text('{"state":"successful","current":"1.0.0"}\n', encoding="utf-8")
     original_production_state = production_state.read_bytes()
+    production_state_root = str(tmp_path / "production-state").replace("\\", "/")
+    development_state_root = str(tmp_path / "development-state").replace("\\", "/")
     config.write_text(
-        f'[profiles.production]\nstate_root = "{tmp_path / "production-state"}"\n'
-        f'[profiles.development]\nstate_root = "{tmp_path / "development-state"}"\n',
+        f'[profiles.production]\nstate_root = "{production_state_root}"\n'
+        f'[profiles.development]\nstate_root = "{development_state_root}"\n',
         encoding="utf-8",
     )
 
@@ -359,7 +370,10 @@ def test_github_release_candidates_are_preferred(monkeypatch):
         "package": "hdc",
         "version": "1.2.0",
         "channel": "stable",
-        "artifacts": {"linux-x86_64": {"file": "hdc.whl", "sha256": digest}},
+        "artifacts": {
+            "linux-x86_64": {"file": "hdc.whl", "sha256": digest},
+            "windows-x86_64": {"file": "hdc.whl", "sha256": digest},
+        },
     }
     responses = {
         "https://api.github.com/repos/Yongyiphan/helix-releases/releases?per_page=100": [
@@ -381,7 +395,10 @@ def test_github_release_candidates_reject_tag_manifest_identity_mismatch(monkeyp
         "package": "hdc",
         "version": "1.2.0",
         "channel": "stable",
-        "artifacts": {"linux-x86_64": {"file": "hdc.whl", "sha256": "a" * 64}},
+        "artifacts": {
+            "linux-x86_64": {"file": "hdc.whl", "sha256": "a" * 64},
+            "windows-x86_64": {"file": "hdc.whl", "sha256": "a" * 64},
+        },
     }
     responses = {
         "https://api.github.com/repos/Yongyiphan/helix-releases/releases?per_page=100": [
@@ -402,7 +419,10 @@ def test_github_release_candidates_fall_back_to_public_atom_feed(monkeypatch):
         "package": "hdc",
         "version": "1.2.0",
         "channel": "stable",
-        "artifacts": {"linux-x86_64": {"file": "hdc.whl", "sha256": digest}},
+        "artifacts": {
+            "linux-x86_64": {"file": "hdc.whl", "sha256": digest},
+            "windows-x86_64": {"file": "hdc.whl", "sha256": digest},
+        },
     }
     feed = b'''<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
       <entry><link href="https://github.com/Yongyiphan/helix-releases/releases/tag/hdc-v1.2.0" /></entry>
