@@ -599,6 +599,15 @@ def _hu_profile_ready(profile: str) -> bool:
         activation = root / "installation.json"
         if not config.is_file() or not activation.is_file():
             return False
+        if profile == "development":
+            # The Windows development service is intentionally on-demand.  Its
+            # stopped state must not make HR bootstrap a second, production HU;
+            # an installed active runtime is sufficient for an artifact handoff.
+            try:
+                active = Path(json.loads(activation.read_text(encoding="utf-8"))["active"])
+            except (OSError, KeyError, TypeError, json.JSONDecodeError):
+                return False
+            return (active / ".venv" / "Scripts" / "python.exe").is_file()
         result = subprocess.run(("sc.exe", "query", service), check=False, capture_output=True, text=True)
         return result.returncode == 0 and "RUNNING" in (result.stdout + result.stderr)
     if platform.system().lower() != "linux":
