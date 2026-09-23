@@ -32,6 +32,10 @@ function Assert-SafeAssetName([string]$Name) {
     }
 }
 
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+    [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+}
+
 function Get-VerifiedRelease([string]$ReleaseRepository, [string]$Package, [switch]$SkipSourceVerification) {
     $api = "https://api.github.com/repos/$Owner/$ReleaseRepository"
     $releases = @(Invoke-GitHubJson "$api/releases?per_page=100")
@@ -117,11 +121,11 @@ function Install-HrRuntime([string]$Wheel, $Release, [string]$HelixRoot) {
     & $python -m pip install --disable-pip-version-check --no-index --no-deps --force-reinstall $Wheel *> $null
     if ($LASTEXITCODE -ne 0) { throw 'Installing the HR wheel failed.' }
 
-    Set-Content -LiteralPath (Join-Path $releaseRoot 'release.json') -Encoding utf8 -Value (@{
+    Write-Utf8NoBom (Join-Path $releaseRoot 'release.json') (@{
         package = $Release.Package; version = $Release.Version; commit = $Release.Commit
         installed_at_utc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json)
-    Set-Content -LiteralPath (Join-Path $packageRoot 'installation.json') -Encoding utf8 -Value (@{
+    Write-Utf8NoBom (Join-Path $packageRoot 'installation.json') (@{
         schema = 1; package = $Release.Package; active_release = $Release.Version
         python = $python; root = $packageRoot
     } | ConvertTo-Json)

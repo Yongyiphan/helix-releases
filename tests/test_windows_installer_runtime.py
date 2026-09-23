@@ -21,6 +21,18 @@ def test_windows_installer_runtime_functions_execute(tmp_path):
         if ([string]::IsNullOrWhiteSpace($definitions)) { throw 'Installer function definitions were not found.' }
         . ([scriptblock]::Create($definitions))
 
+        $encodingProbe = Join-Path ([IO.Path]::GetTempPath()) ('helix-installer-encoding-' + [guid]::NewGuid() + '.json')
+        try {
+            Write-Utf8NoBom $encodingProbe '{"ok":true}'
+            $encodingBytes = [IO.File]::ReadAllBytes($encodingProbe)
+            if ($encodingBytes.Length -ge 3 -and $encodingBytes[0] -eq 239 -and $encodingBytes[1] -eq 187 -and $encodingBytes[2] -eq 191) {
+                throw 'Installer JSON writer emitted a UTF-8 BOM.'
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath $encodingProbe -Force -ErrorAction SilentlyContinue
+        }
+
         $script:fakeResponse = @(
             [pscustomobject]@{ id = 1 }
             [pscustomobject]@{ id = 2 }
