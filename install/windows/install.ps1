@@ -134,6 +134,7 @@ function Install-HrRuntime([string]$Wheel, $Release, [string]$HelixRoot) {
     } | ConvertTo-Json)
     Write-Utf8NoBom (Join-Path $packageRoot 'installation.json') (@{
         schema = 1; package = $Release.Package; active_release = $Release.Version
+        active = $releaseRoot; releases = @($releaseRoot)
         python = $python; root = $packageRoot
     } | ConvertTo-Json)
     Join-Path $venv 'Scripts\hr.exe'
