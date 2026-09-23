@@ -38,8 +38,9 @@ def test_windows_installer_runtime_functions_execute(tmp_path):
             $download = Join-Path $root 'download'
             New-Item -ItemType Directory -Force -Path $payload, $destination, $download | Out-Null
             Set-Content -LiteralPath (Join-Path $payload 'HelixUpdaterService.exe') -Value 'test-service-host'
+            Set-Content -LiteralPath (Join-Path $payload 'HelixUpdaterService.dll') -Value 'test-service-host-library'
             $zip = Join-Path $root 'service-host.zip'
-            Compress-Archive -Path (Join-Path $payload 'HelixUpdaterService.exe') -DestinationPath $zip
+            Compress-Archive -Path (Join-Path $payload '*') -DestinationPath $zip
             $script:fakeZip = $zip
             function Invoke-WebRequest { param([string]$Uri, [string]$OutFile); Copy-Item -LiteralPath $script:fakeZip -Destination $OutFile }
             $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -51,6 +52,10 @@ def test_windows_installer_runtime_functions_execute(tmp_path):
             if (-not (Test-Path -LiteralPath $installed)) { throw 'Service host was not installed.' }
             if ((Get-Content -Raw -LiteralPath $installed).Trim() -ne 'test-service-host') {
                 throw 'Installed service host content did not match the downloaded asset.'
+            }
+            $installedLibrary = Join-Path (Split-Path $installed) 'HelixUpdaterService.dll'
+            if ((Get-Content -Raw -LiteralPath $installedLibrary).Trim() -ne 'test-service-host-library') {
+                throw 'Service host dependencies were not installed with the executable.'
             }
         }
         finally {

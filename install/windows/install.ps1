@@ -137,10 +137,10 @@ function Install-WindowsServiceHost($HuRelease, [string]$TempRoot, [string]$Heli
     Expand-Archive -LiteralPath $archive -DestinationPath $publishRoot -Force
     $serviceHostExecutable = Join-Path $publishRoot 'HelixUpdaterService.exe'
     if (-not (Test-Path $serviceHostExecutable)) { throw 'The HU release service-host asset did not contain HelixUpdaterService.exe.' }
-    $destination = Join-Path $HelixRoot 'service-host\HelixUpdaterService.exe'
-    New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
-    Copy-Item -LiteralPath $serviceHostExecutable -Destination $destination -Force
-    $destination
+    $destinationRoot = Join-Path $HelixRoot 'service-host'
+    New-Item -ItemType Directory -Force -Path $destinationRoot | Out-Null
+    Copy-Item -Path (Join-Path $publishRoot '*') -Destination $destinationRoot -Recurse -Force
+    Join-Path $destinationRoot 'HelixUpdaterService.exe'
 }
 
 Assert-Administrator
