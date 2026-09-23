@@ -94,14 +94,13 @@ profile; it leaves an active production HU service alone. For direct HU source i
 bootstrap, use HU's `scripts/deploy-dev-runtime.sh`, which installs the checkout's code into the
 dev service without publishing. HR itself remains an on-demand CLI, not a service.
 
-Implemented production entry: `install/linux/install.sh`. Windows desktop bootstrap is deferred;
-future PowerShell and batch entrypoints must install the production profile only. A separate Windows
-source-checkout dev bootstrap remains a documentation handoff, not implemented behavior.
+Implemented production entries are `install/linux/install.sh` and the HR-owned Windows
+`install/windows/install.ps1`. Both establish the production profile only. Windows source iteration
+uses the separate checkout-based development runtime and can be started or stopped on demand.
 
-The installer pins the public catalog branch, checks that its latest commit is
-GitHub-verified and associated with `Yongyiphan`, validates HR's manifest and
-provenance, verifies the artifact SHA-256, and only then installs HR. The
-Windows equivalent is planned; it is not currently a supported bootstrap path.
+The installers resolve immutable GitHub Release assets, validate package identity and SHA-256
+digests, then install HR and HU into versioned runtimes. Windows additionally validates and installs
+the published native service-host companion before registering the SCM service.
 
 To remove Helix installations:
 

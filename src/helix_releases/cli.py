@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 
 try:
@@ -27,8 +28,13 @@ DISPLAY_ALIASES = {
     "helix-updater": "hu",
     "hdc": "hdc",
 }
-HU_CONFIG_PATH = Path("/etc/helix/helix-updater.toml")
-LEGACY_HU_CONFIG_PATH = Path("/etc/helix/updater/helix-updater.toml")
+if platform.system().lower() == "windows":
+    _WINDOWS_HELIX_ROOT = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "Helix"
+    HU_CONFIG_PATH = _WINDOWS_HELIX_ROOT / "helix-updater.toml"
+    LEGACY_HU_CONFIG_PATH = _WINDOWS_HELIX_ROOT / "Updater" / "helix-updater.toml"
+else:
+    HU_CONFIG_PATH = Path("/etc/helix/helix-updater.toml")
+    LEGACY_HU_CONFIG_PATH = Path("/etc/helix/updater/helix-updater.toml")
 HU_PROFILE_LAUNCHERS = {
     "production": Path("/usr/local/bin/helix-updater"),
     "development": Path("/usr/local/libexec/helix-development/helix-updater"),
@@ -69,8 +75,32 @@ def _setup_hdc_auth() -> None:
 def _invoke_hu_update(package: str, catalog: Path | None = None, profile: str = "production",
                       artifact: Path | None = None, manifest: dict | None = None) -> dict:
     """Pass HR's verified-release candidate to the selected privileged HU runtime."""
-    if platform.system().lower() != "linux":
-        raise ReleaseError("HR/HU bundle installation is currently Linux-only; Windows support is deferred")
+    if platform.system().lower() == "windows":
+        config = HU_CONFIG_PATH
+        root = _configured_hu_root(config, profile) or default_root("helix-updater")
+        activation = root / "installation.json"
+        if not activation.is_file():
+            raise ReleaseError(f"Windows HU activation record is missing: {activation}")
+        try:
+            active = Path(json.loads(activation.read_text(encoding="utf-8"))["active"])
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ReleaseError(f"Windows HU activation record is invalid: {activation}") from exc
+        launcher = active / ".venv" / "Scripts" / "python.exe"
+        if not launcher.is_file():
+            raise ReleaseError(f"Windows HU runtime launcher is missing: {launcher}")
+        if artifact is None or manifest is None:
+            raise ReleaseError("HR-to-HU handoff requires both a downloaded artifact and its manifest")
+        with tempfile.TemporaryDirectory(prefix="hr-hu-handoff-") as handoff_dir:
+            manifest_path = Path(handoff_dir) / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+            command = [str(launcher), "-m", "helix_updater", "--config", str(config), "--profile", profile]
+            if catalog is not None:
+                command.extend(["--catalog", str(catalog)])
+            command.extend(["install-artifact", package, "--artifact", str(artifact), "--manifest", str(manifest_path)])
+            result = subprocess.run(command, check=False, text=True)
+            if result.returncode:
+                raise ReleaseError(f"HU installation for {package} exited with {result.returncode}")
+            return {"package": package, "state": "artifact_handed_to_hu", "version": manifest.get("version"), "profile": profile}
     config = HU_CONFIG_PATH
     launcher = HU_PROFILE_LAUNCHERS.get(profile)
     if launcher is None:
@@ -256,7 +286,8 @@ def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None,
         artifacts = sorted(output.glob("*.whl"))
         if len(artifacts) != 1:
             raise ReleaseError(f"expected exactly one wheel, found {len(artifacts)}")
-        result = {"handoff_id": handoff["handoff_id"], "component": handoff["component"], "version": handoff["version"], "channel": handoff.get("channel", "dev"), "commit": commit, "artifact": str(artifacts[0]), "tests": "passed"}
+        companion_artifacts = _build_companion_artifacts(handoff, checkout, output)
+        result = {"handoff_id": handoff["handoff_id"], "component": handoff["component"], "version": handoff["version"], "channel": handoff.get("channel", "dev"), "commit": commit, "artifact": str(artifacts[0]), "companion_artifacts": [str(item) for item in companion_artifacts], "tests": "passed"}
         if catalog is not None:
             published = publish(catalog_root=catalog, package=handoff["component"], version=handoff["version"], channel=handoff.get("channel", "dev"), commit=commit, artifact=artifacts[0])
             result.update({"published": True, "manifest": str(published.manifest), "sha256": published.sha256})
@@ -270,6 +301,7 @@ def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None,
                 channel=handoff.get("channel", "dev"),
                 commit=commit,
                 artifact=artifacts[0],
+                extra_artifacts=companion_artifacts,
             )
             result.update({
                 "published_release": True,
@@ -282,6 +314,32 @@ def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None,
     finally:
         if not keep_workspace:
             shutil.rmtree(workspace, ignore_errors=True)
+
+
+def _build_companion_artifacts(handoff: dict, checkout: Path, output: Path) -> list[Path]:
+    """Build non-wheel runtime payloads that HR must publish with the package.
+
+    HU's Python wheel is portable, but its Windows SCM host is a separate native
+    executable. Keeping this decision in HR makes the release boundary explicit:
+    production installers consume a built, immutable host payload instead of
+    downloading source or requiring a compiler on the target machine.
+    """
+    if handoff["component"] != "helix-updater":
+        return []
+    project = checkout / "service-host" / "HelixUpdater.ServiceHost.csproj"
+    if not project.is_file():
+        raise ReleaseError("HU release handoff is missing service-host/HelixUpdater.ServiceHost.csproj")
+    publish_root = Path(tempfile.mkdtemp(prefix="hr-hu-service-host-"))
+    try:
+        _run(["dotnet", "publish", str(project), "-c", "Release", "-o", str(publish_root), "--nologo"], cwd=checkout, label="Windows service-host build")
+        executable = publish_root / "HelixUpdaterService.exe"
+        if not executable.is_file():
+            raise ReleaseError("Windows service-host build did not produce HelixUpdaterService.exe")
+        archive = output / f"helix-updater-service-host-{handoff['version']}-windows-x86_64.zip"
+        shutil.make_archive(str(archive.with_suffix("")), "zip", root_dir=publish_root)
+        return [archive]
+    finally:
+        shutil.rmtree(publish_root, ignore_errors=True)
 
 
 def publish_git(catalog: Path, *, push: bool = False) -> str:
@@ -339,9 +397,11 @@ def main(argv=None) -> int:
             return 0
         if args.command == "_bootstrap-hu":
             require_elevation()
-            if platform.system().lower() != "linux":
-                raise ReleaseError("bundled HU bootstrap is currently Linux-only; Windows support is deferred")
             candidate = __import__("helix_releases.installer", fromlist=["InstallCandidate"]).InstallCandidate("helix-updater", args.version, DEFAULT_RELEASE_CHANNEL, args.artifact, args.sha256)
+            if platform.system().lower() == "windows":
+                result = _bootstrap_windows_hu(candidate, args.target)
+                print(json.dumps(result, sort_keys=True))
+                return 0
             config = HU_CONFIG_PATH
             production_active = _system_service_active("helix-updater.service")
             combined_config = _has_combined_profiles(config)
@@ -429,8 +489,9 @@ def main(argv=None) -> int:
 
 
 def _system_service_active(service: str) -> bool:
-    if platform.system().lower() != "linux":
-        return False
+    if platform.system().lower() == "windows":
+        return subprocess.run(("sc.exe", "query", service), check=False,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     return subprocess.run(("systemctl", "is-active", "--quiet", service), check=False,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
@@ -455,6 +516,52 @@ def _bootstrap_development_profile(candidate, config: Path, legacy_config: Path 
     return {"package": "helix-updater", "version": candidate.version,
             "state": "development_service_started", "development": dev_result,
             "config": str(config), "production_touched": False}
+
+
+def _bootstrap_windows_hu(candidate, target: Path | None = None) -> dict:
+    """Install production HU and register its native Windows SCM host."""
+    host = Path(os.environ.get("HELIX_WINDOWS_SERVICE_HOST", "")).expanduser()
+    if not host.is_file():
+        raise ReleaseError("Windows HU bootstrap requires HELIX_WINDOWS_SERVICE_HOST to point to the native service host")
+    config = HU_CONFIG_PATH
+    root = target or _configured_hu_root(config) or default_root("helix-updater")
+    result = install_candidate(candidate, root, restart=False)
+    release = root / "releases" / candidate.version
+    python = release / ".venv" / "Scripts" / "python.exe"
+    if not python.is_file():
+        raise ReleaseError(f"Windows HU runtime was installed without its Python launcher: {python}")
+    catalog = Path(os.environ.get("HELIX_DEVELOPMENT_CATALOG", str(_WINDOWS_HELIX_ROOT / "development" / "catalog")))
+    catalog.mkdir(parents=True, exist_ok=True)
+    config.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run((str(python), "-m", "helix_updater", "--config", str(config),
+                    "runtime", "profiles-init", "--catalog", str(catalog)), check=True)
+
+    service = "HelixUpdater"
+    log_root = _WINDOWS_HELIX_ROOT / "production" / "updater" / "logs"
+    bin_path = f'"{host}" --service-name "{service}" --profile "production" --root "{root}" --config "{config}" --log-root "{log_root}"'
+    query = subprocess.run(("sc.exe", "query", service), check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if query.returncode == 0:
+        subprocess.run(("sc.exe", "stop", service), check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        command = ("sc.exe", "config", service, "binPath=", bin_path, "start=", "auto")
+    else:
+        command = ("sc.exe", "create", service, "binPath=", bin_path, "start=", "auto",
+                   "DisplayName=", "Helix Updater")
+    subprocess.run(command, check=True)
+    subprocess.run(("sc.exe", "failure", service, "reset=", "86400",
+                    "actions=", "restart/5000/restart/30000/restart/60000"), check=True)
+    subprocess.run(("sc.exe", "start", service), check=True)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        state = subprocess.run(("sc.exe", "query", service), check=False,
+                               capture_output=True, text=True)
+        if state.returncode == 0 and "RUNNING" in (state.stdout + state.stderr):
+            return {"package": candidate.package, "version": candidate.version,
+                    "state": "production_service_started", "path": str(release),
+                    "config": str(config)}
+        time.sleep(1)
+    raise ReleaseError(f"Windows HU service did not reach RUNNING: {service}")
 
 
 def _has_combined_profiles(config: Path) -> bool:
@@ -485,6 +592,15 @@ def _bootstrap_hu(candidate, target: Path | None, profile: str = "production") -
 
 def _hu_profile_ready(profile: str) -> bool:
     """Return true only when the selected Linux HU runtime and service are already active."""
+    if platform.system().lower() == "windows":
+        service = "HelixUpdater" if profile == "production" else "HelixUpdaterDev"
+        config = HU_CONFIG_PATH
+        root = _configured_hu_root(config, profile) or default_root("helix-updater")
+        activation = root / "installation.json"
+        if not config.is_file() or not activation.is_file():
+            return False
+        result = subprocess.run(("sc.exe", "query", service), check=False, capture_output=True, text=True)
+        return result.returncode == 0 and "RUNNING" in (result.stdout + result.stderr)
     if platform.system().lower() != "linux":
         return False
     launcher = HU_PROFILE_LAUNCHERS.get(profile)

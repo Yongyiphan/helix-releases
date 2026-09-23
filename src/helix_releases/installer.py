@@ -94,7 +94,9 @@ def require_elevation() -> None:
 def privileged_command(command: list[str]) -> list[str]:
     """Return the host elevation wrapper used to invoke HU."""
     if platform.system().lower() == "windows":
-        raise ReleaseError("Windows HU invocation requires the elevated launcher integration")
+        # The public Windows bootstrap already runs elevated. Runtime HR
+        # commands inherit that elevation from the operator's PowerShell.
+        return command
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return command
     return ["sudo", *command]
@@ -340,7 +342,7 @@ def default_root(package: str) -> Path:
     else:
         name = package
     if platform.system().lower() == "windows":
-        return Path(os.environ.get("PROGRAMFILES", r"C:\\Program Files")) / "Helix" / name
+        return Path(os.environ.get("PROGRAMDATA", r"C:\\ProgramData")) / "Helix" / name
     return Path("/opt/helix") / name
 
 

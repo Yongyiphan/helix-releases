@@ -62,8 +62,9 @@ def release_tag(package: str, version: str) -> str:
 def _manifest(
     *, package: str, version: str, channel: str, commit: str, filename: str,
     digest: str, updater_requirement: str | None = None,
+    runtime_assets: dict | None = None,
 ) -> dict:
-    return {
+    manifest = {
         "schema": 1,
         "package": package,
         "version": version,
@@ -79,6 +80,9 @@ def _manifest(
         "rollback": {"supported": True},
         "install": {"strategy": "python_wheel", "component": package},
     }
+    if runtime_assets:
+        manifest["runtime_assets"] = runtime_assets
+    return manifest
 
 
 def _sha256(path: Path) -> str:
@@ -131,6 +135,7 @@ def publish(
 def publish_github_release(
     *, repository: str, package: str, version: str, channel: str, commit: str,
     artifact: Path, updater_requirement: str | None = None,
+    extra_artifacts: Iterable[Path] = (),
     target: str = "main",
     runner=subprocess.run,
 ) -> PublishedGitHubRelease:
@@ -147,13 +152,25 @@ def publish_github_release(
     tag = release_tag(package, version)
     manifest_name = f"{package}-{version}.manifest.json"
     digest = _sha256(artifact)
+    extras = []
+    for extra in extra_artifacts:
+        if not extra.is_file():
+            raise ReleaseError(f"release companion artifact does not exist: {extra}")
+        extras.append((_safe_name(extra.name), extra, _sha256(extra)))
+    runtime_assets = {
+        "windows-x86_64": {"file": name, "sha256": digest}
+        for name, _, digest in extras
+        if name.startswith("helix-updater-service-host-")
+    }
     manifest = _manifest(package=package, version=version, channel=channel, commit=commit,
-                         filename=filename, digest=digest, updater_requirement=updater_requirement)
+                         filename=filename, digest=digest, updater_requirement=updater_requirement,
+                         runtime_assets=runtime_assets or None)
     with tempfile.TemporaryDirectory(prefix="hr-release-") as directory:
         manifest_path = Path(directory) / manifest_name
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         command = [
-            "gh", "release", "create", tag, str(artifact), str(manifest_path),
+            "gh", "release", "create", tag, str(artifact),
+            *(str(path) for _, path, _ in extras), str(manifest_path),
             "--repo", repository, "--title", f"{package} {version}",
             "--notes", f"Helix {package} {version} ({channel})", "--target", target,
         ]
