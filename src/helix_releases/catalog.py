@@ -63,6 +63,7 @@ def _manifest(
     *, package: str, version: str, channel: str, commit: str, filename: str,
     digest: str, updater_requirement: str | None = None,
     runtime_assets: dict | None = None,
+    dependencies: list[dict] | None = None,
 ) -> dict:
     manifest = {
         "schema": 1,
@@ -82,6 +83,8 @@ def _manifest(
     }
     if runtime_assets:
         manifest["runtime_assets"] = runtime_assets
+    if dependencies:
+        manifest["dependencies"] = dependencies
     return manifest
 
 
@@ -102,6 +105,7 @@ def publish(
     commit: str,
     artifact: Path,
     updater_requirement: str | None = None,
+    dependency_artifacts: Iterable[dict] = (),
 ) -> PublishedArtifact:
     """Write one independent package release into an explicit local catalog.
 
@@ -124,8 +128,24 @@ def publish(
     temporary = destination.with_suffix(destination.suffix + ".new")
     shutil.copyfile(artifact, temporary)
     temporary.replace(destination)
+    dependencies = []
+    for dependency in dependency_artifacts:
+        dependency_name = _safe_name(str(dependency["file"]))
+        dependency_source = Path(dependency["path"])
+        if not dependency_source.is_file():
+            raise ReleaseError(f"release dependency artifact does not exist: {dependency_source}")
+        dependency_destination = target / dependency_name
+        shutil.copyfile(dependency_source, dependency_destination)
+        dependency_digest = _sha256(dependency_source)
+        dependencies.append({
+            "package": str(dependency["package"]),
+            "version": str(dependency["version"]),
+            "file": dependency_name,
+            "sha256": dependency_digest,
+        })
     manifest = _manifest(package=package, version=version, channel=channel, commit=commit,
-                         filename=filename, digest=digest, updater_requirement=updater_requirement)
+                         filename=filename, digest=digest, updater_requirement=updater_requirement,
+                         dependencies=dependencies or None)
     temporary_manifest = existing.with_suffix(".json.new")
     temporary_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temporary_manifest.replace(existing)
@@ -136,6 +156,7 @@ def publish_github_release(
     *, repository: str, package: str, version: str, channel: str, commit: str,
     artifact: Path, updater_requirement: str | None = None,
     extra_artifacts: Iterable[Path] = (),
+    dependency_artifacts: Iterable[dict] = (),
     target: str = "main",
     runner=subprocess.run,
 ) -> PublishedGitHubRelease:
@@ -157,6 +178,20 @@ def publish_github_release(
         if not extra.is_file():
             raise ReleaseError(f"release companion artifact does not exist: {extra}")
         extras.append((_safe_name(extra.name), extra, _sha256(extra)))
+    dependencies = []
+    for dependency in dependency_artifacts:
+        dependency_path = Path(dependency["path"])
+        if not dependency_path.is_file():
+            raise ReleaseError(f"release dependency artifact does not exist: {dependency_path}")
+        dependency_name = _safe_name(str(dependency["file"]))
+        dependency_digest = _sha256(dependency_path)
+        extras.append((dependency_name, dependency_path, dependency_digest))
+        dependencies.append({
+            "package": str(dependency["package"]),
+            "version": str(dependency["version"]),
+            "file": dependency_name,
+            "sha256": dependency_digest,
+        })
     runtime_assets = {
         "windows-x86_64": {"file": name, "sha256": digest}
         for name, _, digest in extras
@@ -164,7 +199,8 @@ def publish_github_release(
     }
     manifest = _manifest(package=package, version=version, channel=channel, commit=commit,
                          filename=filename, digest=digest, updater_requirement=updater_requirement,
-                         runtime_assets=runtime_assets or None)
+                         runtime_assets=runtime_assets or None,
+                         dependencies=dependencies or None)
     with tempfile.TemporaryDirectory(prefix="hr-release-") as directory:
         manifest_path = Path(directory) / manifest_name
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

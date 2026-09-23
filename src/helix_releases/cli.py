@@ -287,9 +287,27 @@ def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None,
         if len(artifacts) != 1:
             raise ReleaseError(f"expected exactly one wheel, found {len(artifacts)}")
         companion_artifacts = _build_companion_artifacts(handoff, checkout, output)
+        dependency_artifacts = []
+        for item in handoff.get("dependency_artifacts", []):
+            if not isinstance(item, dict):
+                raise ReleaseError("release dependency artifact metadata is invalid")
+            try:
+                dependency_path = Path(item["path"]).resolve()
+                dependency_package = str(item["package"])
+                dependency_version = str(item["version"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ReleaseError("release dependency artifact metadata is invalid") from exc
+            if not dependency_path.is_file():
+                raise ReleaseError(f"release dependency artifact does not exist: {dependency_path}")
+            dependency_artifacts.append({
+                "package": dependency_package,
+                "version": dependency_version,
+                "file": dependency_path.name,
+                "path": dependency_path,
+            })
         result = {"handoff_id": handoff["handoff_id"], "component": handoff["component"], "version": handoff["version"], "channel": handoff.get("channel", "dev"), "commit": commit, "artifact": str(artifacts[0]), "companion_artifacts": [str(item) for item in companion_artifacts], "tests": "passed"}
         if catalog is not None:
-            published = publish(catalog_root=catalog, package=handoff["component"], version=handoff["version"], channel=handoff.get("channel", "dev"), commit=commit, artifact=artifacts[0])
+            published = publish(catalog_root=catalog, package=handoff["component"], version=handoff["version"], channel=handoff.get("channel", "dev"), commit=commit, artifact=artifacts[0], dependency_artifacts=dependency_artifacts)
             result.update({"published": True, "manifest": str(published.manifest), "sha256": published.sha256})
         else:
             result["published"] = False
@@ -302,6 +320,7 @@ def packages(handoff_path: Path, output: Path, *, catalog: Path | None = None,
                 commit=commit,
                 artifact=artifacts[0],
                 extra_artifacts=companion_artifacts,
+                dependency_artifacts=dependency_artifacts,
             )
             result.update({
                 "published_release": True,
@@ -386,6 +405,7 @@ def main(argv=None) -> int:
     bootstrap_parser.add_argument("--sha256", required=True)
     bootstrap_parser.add_argument("--profile", choices=("production", "development"), default="production")
     bootstrap_parser.add_argument("--target", type=Path)
+    bootstrap_parser.add_argument("--dependencies-file", type=Path)
     args = parser.parse_args(argv)
     if args.command == "install" and args.channel is None:
         args.channel = "dev" if args.profile == "development" else DEFAULT_RELEASE_CHANNEL
@@ -397,7 +417,25 @@ def main(argv=None) -> int:
             return 0
         if args.command == "_bootstrap-hu":
             require_elevation()
-            candidate = __import__("helix_releases.installer", fromlist=["InstallCandidate"]).InstallCandidate("helix-updater", args.version, DEFAULT_RELEASE_CHANNEL, args.artifact, args.sha256)
+            installer = __import__("helix_releases.installer", fromlist=["DependencyArtifact", "InstallCandidate"])
+            dependencies = []
+            if args.dependencies_file is not None:
+                try:
+                    raw_dependencies = json.loads(args.dependencies_file.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ReleaseError("HU bootstrap dependency metadata is invalid") from exc
+                if not isinstance(raw_dependencies, list):
+                    raise ReleaseError("HU bootstrap dependency metadata is invalid")
+                try:
+                    dependencies = [installer.DependencyArtifact(
+                        str(item["package"]), str(item["version"]), Path(item["artifact"]), str(item["sha256"])
+                    ) for item in raw_dependencies]
+                except (KeyError, TypeError) as exc:
+                    raise ReleaseError("HU bootstrap dependency metadata is invalid") from exc
+            candidate = installer.InstallCandidate(
+                "helix-updater", args.version, DEFAULT_RELEASE_CHANNEL, args.artifact, args.sha256,
+                dependencies=tuple(dependencies),
+            )
             if platform.system().lower() == "windows":
                 result = _bootstrap_windows_hu(candidate, args.target)
                 print(json.dumps(result, sort_keys=True))
@@ -583,11 +621,21 @@ def _bootstrap_hu(candidate, target: Path | None, profile: str = "production") -
     command_args = [sys.executable, "-m", "helix_releases.cli", "_bootstrap-hu", "--artifact", str(candidate.artifact), "--version", candidate.version, "--sha256", candidate.sha256, "--profile", profile]
     if target is not None:
         command_args.extend(("--target", str(target)))
-    command = privileged_command(command_args)
-    result = subprocess.run(command, check=False, text=True)
-    if result.returncode:
-        raise ReleaseError(f"HU bootstrap exited with {result.returncode}")
-    return {"package": candidate.package, "version": candidate.version, "state": "bootstrapped"}
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False) as handle:
+        dependencies_path = Path(handle.name)
+        json.dump([
+            {"package": item.package, "version": item.version, "artifact": str(item.artifact), "sha256": item.sha256}
+            for item in candidate.dependencies
+        ], handle)
+    command_args.extend(("--dependencies-file", str(dependencies_path)))
+    try:
+        command = privileged_command(command_args)
+        result = subprocess.run(command, check=False, text=True)
+        if result.returncode:
+            raise ReleaseError(f"HU bootstrap exited with {result.returncode}")
+        return {"package": candidate.package, "version": candidate.version, "state": "bootstrapped"}
+    finally:
+        dependencies_path.unlink(missing_ok=True)
 
 
 def _hu_profile_ready(profile: str) -> bool:

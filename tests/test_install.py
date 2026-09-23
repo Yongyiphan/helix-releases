@@ -34,6 +34,37 @@ def test_install_list_reads_the_platform_release(tmp_path):
     assert installer.latest_candidate(tmp_path, "hdc", "stable").artifact.name == "hdc.whl"
 
 
+def test_local_candidate_loads_verified_dependency_artifacts(tmp_path):
+    release = tmp_path / "releases" / "helix-updater" / "1.0.0"
+    release.mkdir(parents=True)
+    artifact = release / "helix_updater-1.0.0-py3-none-any.whl"
+    dependency = release / "helix_network-0.1.0-py3-none-any.whl"
+    artifact.write_bytes(b"hu-wheel")
+    dependency.write_bytes(b"network-wheel")
+    digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest = {
+        "package": "helix-updater",
+        "version": "1.0.0",
+        "channel": "stable",
+        "artifacts": {
+            "windows-x86_64": {"file": artifact.name, "sha256": digest(artifact)},
+        },
+        "dependencies": [{
+            "package": "helix-network",
+            "version": "0.1.0",
+            "file": dependency.name,
+            "sha256": digest(dependency),
+        }],
+    }
+    (release / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    candidate = installer.latest_candidate(tmp_path, "helix-updater", "stable")
+
+    assert [(item.package, item.version, item.artifact.name) for item in candidate.dependencies] == [
+        ("helix-network", "0.1.0", dependency.name),
+    ]
+
+
 def test_single_component_install_with_catalog_uses_local_candidate(monkeypatch, tmp_path):
     release = tmp_path / "releases" / "hdc" / "1.0.0"
     release.mkdir(parents=True)
