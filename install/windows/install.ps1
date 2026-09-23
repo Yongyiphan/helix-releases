@@ -36,6 +36,13 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
     [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
 }
 
+function Stop-ExistingUpdaterService {
+    $service = Get-Service -Name 'HelixUpdater' -ErrorAction SilentlyContinue
+    if (-not $service -or $service.Status -eq 'Stopped') { return }
+    Stop-Service -Name 'HelixUpdater' -Force
+    $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+}
+
 function Get-VerifiedRelease([string]$ReleaseRepository, [string]$Package, [switch]$SkipSourceVerification) {
     $api = "https://api.github.com/repos/$Owner/$ReleaseRepository"
     $releases = @(Invoke-GitHubJson "$api/releases?per_page=100")
@@ -141,6 +148,7 @@ function Install-WindowsServiceHost($HuRelease, [string]$TempRoot, [string]$Heli
     Expand-Archive -LiteralPath $archive -DestinationPath $publishRoot -Force
     $serviceHostExecutable = Join-Path $publishRoot 'HelixUpdaterService.exe'
     if (-not (Test-Path $serviceHostExecutable)) { throw 'The HU release service-host asset did not contain HelixUpdaterService.exe.' }
+    Stop-ExistingUpdaterService
     $destinationRoot = Join-Path $HelixRoot 'service-host'
     New-Item -ItemType Directory -Force -Path $destinationRoot | Out-Null
     Copy-Item -Path (Join-Path $publishRoot '*') -Destination $destinationRoot -Recurse -Force
