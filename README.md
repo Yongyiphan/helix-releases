@@ -1,33 +1,32 @@
 # Helix Releases (HR)
 
-HR is the on-demand build, publication, and public installation interface for
-Helix components. It is not a background runtime service. HR and HU are
-distributed together, while HU remains the privileged installation engine.
-Build, release, and deployment are separate: ordinary development builds local artifacts for an
-isolated dev runtime; only an intentional validated release enters the production distribution path.
-See [HX-ADR-022](docs/decisions/HX-ADR-022-build-release-deploy-separation.md).
+HR is the on-demand build, publication, and installation interface for Helix components. It is
+not a background service. HU remains the privileged installation and runtime-management engine.
 
-The automated HDC lane and the directly tasked Codex lane converge on HR's same handoff:
+Build, release, and deployment are separate lifecycle stages:
 
 ```text
-HDC automation (Hermes optional) ─┐
-                                  ├→ HR validates/tests/builds → intentional publication → HU installs
-direct Codex handoff ─────────────┘
+source and tests -> HR validates and builds -> intentional publication -> HU installs and operates
 ```
 
-HR publishes a versioned contract under `contracts/`. Either lane gathers a complete handoff that
-matches it; Hermes is optional tooling and its status is not required. HR never queries HDC. HR
-refuses dirty source, commit drift, missing handoff files, contract/recipe mismatch, failed tests,
-and ambiguous wheel output.
+HR validates the source commit, release contract, recipe, tests, and artifact before publication.
+Automation and direct operator workflows use the same validation path. HR does not query HDC and
+does not move installation authority into HDC.
 
-## Local rehearsal
+The current validated production baseline is:
 
-```bash
-hdc release request hdc --version 1.3.2 --channel dev
-hr packages /path/to/handoff.json
-```
+| Component | Version |
+| --- | --- |
+| HR | 0.2.1 |
+| HU | 0.2.0 |
+| HN | 0.1.0 |
 
-The public release page contains one GitHub Release per component/version:
+See [build/release/deploy separation](docs/decisions/HX-ADR-022-build-release-deploy-separation.md)
+for the lifecycle decision.
+
+## Release layout
+
+Each published component version has one GitHub Release:
 
 ```text
 <package>-v<version>/
@@ -35,85 +34,54 @@ The public release page contains one GitHub Release per component/version:
   <artifact>
 ```
 
-Each release uses `<package>-v<MAJOR.MINOR.PATCH>` as its unique tag, such as
-`helix-updater-v0.1.0`, and carries the manifest and build artifact as release assets. Production
-discovery reads Release assets only. The checked-out `releases/<package>/<version>/` catalog is
-reserved for explicit local development rehearsals (`--catalog`). HU and HR start from version
-`0.1.0`; their previous checked-in catalog artifacts have been removed as part of the reset.
-```
+Production discovery reads GitHub Release assets only. The checked-out
+`releases/<package>/<version>/` catalog is for explicit local development rehearsals. Manifests
+identify the package, version, commit, platform, artifact, and SHA-256 digest.
 
-This allows HC, HEP, HDC, HR, and HU to release independently while sharing
-one public repository. HU selects only packages subscribed on its host.
+HR publishes through the authenticated `gh` CLI. HU reads public releases anonymously and never
+receives publication credentials. HR's normal build and publication commands do not require
+elevation.
 
-HR publishes this layout to the public GitHub repository through the authenticated
-`gh` CLI. Under [HX-ADR-024](docs/decisions/HX-ADR-024-github-cli-publishing-auth.md),
-HDC owns the normal PAT-backed `gh` login and passes that saved context to HR. A directly tasked
-Codex workflow uses the operator's existing `gh` login. HU reads public releases anonymously and
-never receives the publishing credential. Other publisher authentication methods are out of scope
-until a concrete use case is accepted.
+## Installation
 
-## Privileged bootstrap installation
-
-Once HR itself is available on a host, it can install a published baseline
-from a local clone of the public catalog:
-
-```bash
-hr install list
-hr install hu
-hr install hdc
-# or install every published component:
-hr install all
-```
-
-The public HR bootstrap is a self-fetching, verified production bootstrap. It installs the stable
-HR CLI and uses it to install and start only the production HU runtime. The paired machine-local
-TOML still defines both profiles, but the dev HU binary, service, state, and cache are not installed
-by the public entrypoint:
+Linux production bootstrap:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Yongyiphan/helix-releases/main/install/linux/install.sh | sudo bash
 ```
 
-`hr` and `hu` are accepted aliases for `helix-releases` and `helix-updater`.
-HR defaults to GitHub Releases in `Yongyiphan/helix-releases` and the `stable`
-channel. `--repository`, `--catalog`, `--channel`, and `--profile` remain available
-for mirrors and explicit development operations. HR itself is an on-demand CLI, not a daemon. It
-selects and downloads the requested artifact and manifest, then hands both to HU. HR invokes HU
-through the host elevation mechanism. HU owns verification, activation, health checks, rollback,
-service lifecycle, polling, and self-update. HR's normal build and publication commands do not
-require elevation.
+Windows production installation is provided by the HR-owned `install/windows/install.ps1` entry
+point. It validates immutable GitHub Release assets, installs versioned HR and HU runtimes, and
+installs the native Windows service-host companion before registering the production service.
+The validated Windows baseline is HR `0.2.1` with HU `0.2.0`.
 
-To establish the isolated dev HU runtime, use an HR source checkout with its venv installed:
+Both installers establish the production profile only. Windows source iteration uses the separate
+checkout-based development runtime and must not replace or modify the production service.
+
+HR invokes HU through the host elevation mechanism. HU owns verification, activation, health
+checks, rollback, service lifecycle, polling, and self-update.
+
+For an isolated local HU development runtime:
 
 ```bash
 sudo bash install/linux/bootstrap-development.sh
 ```
 
-This invokes the checkout's HR CLI and installs the dev-channel HU only into the development
-profile; it leaves an active production HU service alone. For direct HU source iteration after that
-bootstrap, use HU's `scripts/deploy-dev-runtime.sh`, which installs the checkout's code into the
-dev service without publishing. HR itself remains an on-demand CLI, not a service.
+The development bootstrap uses separate paths, state, service identity, and channel. It does not
+publish a release or alter the production runtime.
 
-Implemented production entries are `install/linux/install.sh` and the HR-owned Windows
-`install/windows/install.ps1`. Both establish the production profile only. Windows source iteration
-uses the separate checkout-based development runtime and can be started or stopped on demand.
-
-The installers resolve immutable GitHub Release assets, validate package identity and SHA-256
-digests, then install HR and HU into versioned runtimes. Windows additionally validates and installs
-the published native service-host companion before registering the SCM service.
-
-To remove Helix installations:
+## Removal
 
 ```bash
 sudo install/linux/uninstall.sh
 sudo install/linux/uninstall.sh --purge-state
 ```
 
-The default preserves component state and the machine-local HU profile configuration; `--purge-state`
-removes those as well. Both production and development HU services/runtimes are removed.
+The default preserves component state and machine-local configuration. `--purge-state` removes
+those as well.
 
-Recommended GitHub protections are provided in
-`docs/github-ruleset-main.json` and `docs/github-ruleset-release-tags.json`.
-Import both under Settings → Rules → Rulesets. With the `main` ruleset
-enabled, publication must use a branch and pull request rather than push
-directly to `main`.
+## Protected publication
+
+Recommended GitHub protections are provided in `docs/github-ruleset-main.json` and
+`docs/github-ruleset-release-tags.json`. Publication should use a branch and pull request rather
+than a direct push to `main`.
