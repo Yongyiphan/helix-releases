@@ -135,11 +135,11 @@ function Install-WindowsServiceHost($HuRelease, [string]$TempRoot, [string]$Heli
     if ($actual -ne $HuRelease.ServiceHostMetadata.sha256.ToLowerInvariant()) { throw 'HU Windows service-host checksum mismatch.' }
     $publishRoot = Join-Path $TempRoot 'service-host-publish'
     Expand-Archive -LiteralPath $archive -DestinationPath $publishRoot -Force
-    $host = Join-Path $publishRoot 'HelixUpdaterService.exe'
-    if (-not (Test-Path $host)) { throw 'The HU release service-host asset did not contain HelixUpdaterService.exe.' }
+    $serviceHostExecutable = Join-Path $publishRoot 'HelixUpdaterService.exe'
+    if (-not (Test-Path $serviceHostExecutable)) { throw 'The HU release service-host asset did not contain HelixUpdaterService.exe.' }
     $destination = Join-Path $HelixRoot 'service-host\HelixUpdaterService.exe'
     New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
-    Copy-Item -LiteralPath $host -Destination $destination -Force
+    Copy-Item -LiteralPath $serviceHostExecutable -Destination $destination -Force
     $destination
 }
 

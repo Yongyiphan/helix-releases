@@ -33,7 +33,7 @@ def test_installed_hr_wheel_rehearses_a_local_build(tmp_path):
     rehearsal_env = {**__import__("os").environ, "PYTHONPATH": sysconfig.get_paths()["purelib"]}
     _run([str(python), "-m", "pip", "install", "--no-index", str(wheel)], env=rehearsal_env)
     hr = runtime / ("Scripts/hr.exe" if sys.platform == "win32" else "bin/hr")
-    assert _run([str(hr), "--version"], env=rehearsal_env).stdout.strip() == "0.2.2"
+    assert _run([str(hr), "--version"], env=rehearsal_env).stdout.strip() == "0.2.3"
 
     source = tmp_path / "component"
     (source / "src" / "demo_component").mkdir(parents=True)
