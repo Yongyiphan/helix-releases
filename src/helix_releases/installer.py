@@ -21,6 +21,14 @@ from .install_lock import installation_lock
 
 
 @dataclass(frozen=True)
+class DependencyArtifact:
+    package: str
+    version: str
+    artifact: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
 class InstallCandidate:
     package: str
     version: str
@@ -28,6 +36,7 @@ class InstallCandidate:
     artifact: Path
     sha256: str
     manifest: dict | None = None
+    dependencies: tuple[DependencyArtifact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -41,6 +50,39 @@ class RemoteCandidate:
 class FetchedCandidate:
     candidate: InstallCandidate
     temporary_root: Path
+
+
+def _manifest_dependencies(manifest: dict | None, base: Path, download_base: str | None = None) -> tuple[DependencyArtifact, ...]:
+    raw_dependencies = manifest.get("dependencies", []) if isinstance(manifest, dict) else []
+    if not isinstance(raw_dependencies, list):
+        raise ReleaseError("release dependencies must be a list")
+    result = []
+    for item in raw_dependencies:
+        if not isinstance(item, dict):
+            raise ReleaseError("release dependency metadata is invalid")
+        package = item.get("package")
+        version = item.get("version")
+        filename = item.get("file")
+        digest = item.get("sha256")
+        if not all(isinstance(value, str) and value for value in (package, version, filename, digest)) or len(digest) != 64:
+            raise ReleaseError("release dependency metadata is invalid")
+        filename = _safe_filename(filename)
+        if download_base is None:
+            artifact = base / filename
+            if not artifact.is_file():
+                raise ReleaseError(f"release dependency artifact is missing: {artifact}")
+        else:
+            artifact = base / filename
+            url = download_base.rstrip("/") + "/" + urllib.parse.quote(filename)
+            try:
+                with _public_get(url) as response:
+                    artifact.write_bytes(response.read())
+            except OSError as exc:
+                raise ReleaseError(f"could not download release dependency artifact: {url}") from exc
+        if _sha256(artifact) != digest.lower():
+            raise ReleaseError(f"release dependency checksum mismatch: {filename}")
+        result.append(DependencyArtifact(package, version, artifact, digest.lower()))
+    return tuple(result)
 
 
 PACKAGE_ALIASES = {
@@ -94,7 +136,9 @@ def require_elevation() -> None:
 def privileged_command(command: list[str]) -> list[str]:
     """Return the host elevation wrapper used to invoke HU."""
     if platform.system().lower() == "windows":
-        raise ReleaseError("Windows HU invocation requires the elevated launcher integration")
+        # The public Windows bootstrap already runs elevated. Runtime HR
+        # commands inherit that elevation from the operator's PowerShell.
+        return command
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return command
     return ["sudo", *command]
@@ -136,7 +180,8 @@ def latest_candidate(catalog: Path, requested: str, channel: str) -> InstallCand
             filename = _safe_filename(filename)
             artifact = manifest_path.parent / filename
             if artifact.is_file() and len(digest) == 64:
-                candidates.append(InstallCandidate(package, str(value["version"]), channel, artifact, digest.lower(), value))
+                dependencies = _manifest_dependencies(value, manifest_path.parent)
+                candidates.append(InstallCandidate(package, str(value["version"]), channel, artifact, digest.lower(), value, dependencies))
         except (OSError, ValueError, KeyError, TypeError):
             continue
     if not candidates:
@@ -241,6 +286,7 @@ def github_release_candidates(repository: str, channel: str = "stable") -> list[
             artifact_url = artifact_asset.get("browser_download_url") if isinstance(artifact_asset, dict) else None
             if not isinstance(artifact_url, str):
                 continue
+            release_download_base = artifact_url.rsplit("/", 1)[0]
             result.append(RemoteCandidate(
                 InstallCandidate(package, version, channel, Path(filename), digest.lower(), manifest),
                 manifest_url,
@@ -310,7 +356,14 @@ def fetch_remote_candidate(repository: str, requested: str, channel: str = "stab
     except Exception:
         shutil.rmtree(temporary_root, ignore_errors=True)
         raise ReleaseError(f"could not download public release artifact: {artifact_url}")
-    return FetchedCandidate(InstallCandidate(package, selected.candidate.version, channel, destination, selected.candidate.sha256, selected.candidate.manifest), temporary_root)
+    dependencies = _manifest_dependencies(
+        selected.candidate.manifest,
+        temporary_root,
+        artifact_url.rsplit("/", 1)[0],
+    )
+    candidate = InstallCandidate(package, selected.candidate.version, channel, destination,
+                                 selected.candidate.sha256, selected.candidate.manifest, dependencies)
+    return FetchedCandidate(candidate, temporary_root)
 
 
 def _version_key(value: str) -> tuple:
@@ -340,7 +393,7 @@ def default_root(package: str) -> Path:
     else:
         name = package
     if platform.system().lower() == "windows":
-        return Path(os.environ.get("PROGRAMFILES", r"C:\\Program Files")) / "Helix" / name
+        return Path(os.environ.get("PROGRAMDATA", r"C:\\ProgramData")) / "Helix" / name
     return Path("/opt/helix") / name
 
 
@@ -387,7 +440,11 @@ def install_candidate(candidate: InstallCandidate, target: Path, service: str | 
             environment = staged / ".venv"
             venv.EnvBuilder(with_pip=True, clear=True).create(environment)
             pip = environment / ("Scripts" if platform.system().lower() == "windows" else "bin") / ("pip.exe" if platform.system().lower() == "windows" else "pip")
-            _run([str(pip), "install", "--no-cache-dir", "--force-reinstall", str(candidate.artifact)])
+            for dependency in candidate.dependencies:
+                if _sha256(dependency.artifact) != dependency.sha256:
+                    raise ReleaseError(f"dependency checksum mismatch for {dependency.artifact.name}")
+                _run([str(pip), "install", "--no-cache-dir", "--no-deps", "--force-reinstall", str(dependency.artifact)])
+            _run([str(pip), "install", "--no-cache-dir", "--no-deps", "--force-reinstall", str(candidate.artifact)])
             (staged / ".artifact.sha256").write_text(actual + "\n", encoding="utf-8")
             staged.rename(release)
             if platform.system().lower() != "windows":
